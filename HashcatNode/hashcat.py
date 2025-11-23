@@ -11,7 +11,12 @@ import subprocess
 import tempfile
 import threading
 import time
-from datetime import UTC, datetime
+try:
+    from datetime import UTC, datetime
+except ImportError:  # pragma: no cover - Python <3.11 lacks datetime.UTC
+    from datetime import datetime, timezone as _timezone
+
+    UTC = _timezone.utc
 from os import listdir
 from os.path import isfile, join
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
