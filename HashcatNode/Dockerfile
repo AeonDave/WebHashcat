@@ -1,32 +1,54 @@
-FROM dizcza/docker-hashcat:latest
+ARG HASHCAT_BASE=dizcza/docker-hashcat:cuda
+FROM ${HASHCAT_BASE}
+ARG HASHCAT_VERSION=v7.1.2
+ARG HASHCAT_BINARY=/usr/local/bin/hashcat
 
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip 
+# Install Python runtime, OpenCL deps and toolchain for building hashcat
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        openssl \
+        git \
+        build-essential \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        zlib1g-dev \
+        ocl-icd-opencl-dev \
+        ocl-icd-libopencl1 \
+        clinfo \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /hashcatnode/
+# Build and install the requested hashcat release
+RUN git clone https://github.com/hashcat/hashcat.git /tmp/hashcat && \
+    cd /tmp/hashcat && git checkout ${HASHCAT_VERSION} && \
+    make install -j"$(nproc)" && \
+    rm -rf /tmp/hashcat
+
+WORKDIR /hashcatnode
 
 EXPOSE 9999
 
 # Python requirements
-ADD requirements.txt /hashcatnode/
-RUN pip3 install -r ./requirements.txt
+COPY requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt
 
+# Application sources
 COPY . .
 
-# What to run to build image
-RUN python3 ./create_database.py
-RUN openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/C=UK/ST=Warwickshire/L=Leamington/O=OrgName/OU=IT Department/CN=example.com"
+# Initialise sqlite DB, TLS certificates and docker-friendly settings
+RUN python3 ./create_database.py && \
+    openssl req -x509 -newkey rsa:4096 \
+      -keyout server.key -out server.crt \
+      -days 365 -nodes \
+      -subj "/C=IT/ST=Italy/L=Turin/O=WebHashcat/OU=HashcatNode/CN=hashcatnode" && \
+    cp settings.ini.sample settings.ini && \
+    sed -i 's/hashcatnodeuser/DOCKER_ENV/' settings.ini && \
+    sed -i 's/hashcatnodehash/DOCKER_ENV/' settings.ini && \
+    sed -i 's/\/path\/to\/hashcatnode\/hashes\/dir/\/hashcatnode\/hashes/' settings.ini && \
+    sed -i 's/\/path\/to\/hashcatnode\/rule\/dir/\/hashcatnode\/rules/' settings.ini && \
+    sed -i 's/\/path\/to\/hashcatnode\/wordlist\/dir/\/hashcatnode\/wordlists/' settings.ini && \
+    sed -i 's/\/path\/to\/hashcatnode\/mask\/dir/\/hashcatnode\/masks/' settings.ini && \
+        sed -i "s#/usr/bin/hashcat#${HASHCAT_BINARY}#" settings.ini
 
-# Prepare config file
-RUN cp settings.ini.sample settings.ini
-RUN sed -i 's/hashcatnodeuser/DOCKER_ENV/' settings.ini
-RUN sed -i 's/hashcatnodehash/DOCKER_ENV/' settings.ini
-RUN sed -i 's/\/path\/to\/hashcatnode\/hashes\/dir/\/hashcatnode\/hashes/' settings.ini
-RUN sed -i 's/\/path\/to\/hashcatnode\/rule\/dir/\/hashcatnode\/rules/' settings.ini
-RUN sed -i 's/\/path\/to\/hashcatnode\/wordlist\/dir/\/hashcatnode\/wordlists/' settings.ini
-RUN sed -i 's/\/path\/to\/hashcatnode\/mask\/dir/\/hashcatnode\/masks/' settings.ini
-RUN sed -i 's/\/usr\/bin\/hashcat/\/root\/hashcat\/hashcat/' settings.ini
-
-# What will be executed at startup
-CMD [ "python3", "./hashcatnode.py" ]
+CMD ["python3", "./hashcatnode.py"]

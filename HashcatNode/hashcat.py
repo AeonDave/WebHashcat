@@ -1,83 +1,141 @@
 #!/usr/bin/python3
-import os
-import sys
-import re
-import time
-import subprocess
-import logging
+from __future__ import annotations
+
 import hashlib
+import logging
+import os
+import random
+import re
+import string
+import subprocess
 import tempfile
+import threading
+import time
+from datetime import UTC, datetime
 from os import listdir
 from os.path import isfile, join
-from datetime import datetime
-import threading
-import random
-import string
-import operator
-if os.name == 'nt':
-    import win32console
-from peewee import Model, SqliteDatabase, CharField, DateTimeField, ForeignKeyField, IntegerField, BooleanField, TextField, BlobField, FloatField
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-database = SqliteDatabase(os.path.dirname(os.path.abspath( __file__ )) + os.sep + "hashcatnode.db")
+if os.name == 'nt':
+    try:  # pragma: no cover - Windows only dependency
+        import win32console  # type: ignore
+    except ImportError:  # pragma: no cover - allow running without pywin32
+        win32console = None  # type: ignore
+else:  # pragma: no cover - non-Windows platforms never use win32console
+    win32console = None  # type: ignore
+
+from peewee import (
+    BooleanField,
+    CharField,
+    DateTimeField,
+    FloatField,
+    IntegerField,
+    Model,
+    SqliteDatabase,
+    TextField,
+)
+
+database = SqliteDatabase(os.path.dirname(os.path.abspath(__file__)) + os.sep + "hashcatnode.db")
+
 
 class Hashcat(object):
+    binary: str = ""
+    rules_dir: str = ""
+    mask_dir: str = ""
+    wordlist_dir: str = ""
+    version: str = ""
+    hash_modes: Dict[int, Dict[str, str]] = {}
+    rules: Dict[str, Dict[str, str]] = {}
+    masks: Dict[str, Dict[str, str]] = {}
+    wordlists: Dict[str, Dict[str, str]] = {}
+    sessions: Dict[str, "Session"] = {}
+    workload_profile: int = 3  # default hashcat value
+    brain: Dict[str, str] = {"enabled": "false", "host": "", "port": "", "password": ""}
 
-    hash_modes = {}
-    rules = {}
-    masks = {}
-    wordlists = {}
-    sessions = {}
-    workload_profile = 3 # default hashcat value
+    if TYPE_CHECKING:
+        commandline_path: str
+        rules_dir: str
+        mask_dir: str
+        wordlist_dir: str
+        potfile_path: str
+        output_directory: str
+        log_file: str
+        hashcat_debug_file: bool
+        session_process: Optional[subprocess.Popen]
+        win_stdin: Any
+        thread: threading.Thread
+        hash_modes: Dict[int, Dict[str, str]]
+        rules: Dict[str, Dict[str, str]]
+        masks: Dict[str, Dict[str, str]]
+        wordlists: Dict[str, Dict[str, str]]
+        sessions: Dict[str, "Session"]
 
     """
         Parse hashcat version
     """
+
     @classmethod
     def parse_version(self):
 
         # cwd needs to be added for Windows version of hashcat
-        hashcat_version = subprocess.Popen([self.binary, '-V'] , stdout=subprocess.PIPE, cwd=os.path.dirname(self.binary))
+        hashcat_version = subprocess.Popen([self.binary, '-V'], stdout=subprocess.PIPE,
+                                           cwd=os.path.dirname(self.binary))
         self.version = hashcat_version.communicate()[0].decode()
 
     """
         Parse hashcat help
     """
+
     @classmethod
     def parse_help(self):
-        help_section = None
-        help_section_regex = re.compile("^- \[ (?P<section_name>.*) \] -$")
-        hash_mode_regex = re.compile("^\s*(?P<id>\d+)\s+\|\s+(?P<name>.+)\s+\|\s+(?P<description>.+)\s*$")
+        self.hash_modes = {}
 
-        # cwd needs to be added for Windows version of hashcat
-        hashcat_help = subprocess.Popen([self.binary, '--help'], stdout=subprocess.PIPE, cwd=os.path.dirname(self.binary))
-        for line in hashcat_help.stdout:
-            line = line.decode()
-            line = line.rstrip()
+        help_section_regex = re.compile(r"^- \[ (?P<section_name>.*) ] -$", re.IGNORECASE)
+        hash_mode_regex = re.compile(r"^\s*(?P<id>\d+)\s+\|\s+(?P<name>.+?)\s+\|\s+(?P<description>.+)\s*$")
 
-            if len(line) == 0:
-                continue
+        def parse_from_args(args):
+            help_section = None
+            hashcat_help = subprocess.Popen(args, stdout=subprocess.PIPE, cwd=os.path.dirname(self.binary))
+            for line in hashcat_help.stdout:
+                line = line.decode().rstrip()
 
-            section_match = help_section_regex.match(line)
-            if section_match:
-                help_section = section_match.group("section_name")
-                continue
+                if not line:
+                    continue
 
-            if help_section == "Hash modes":
-                hash_mode_match = hash_mode_regex.match(line)
-                if hash_mode_match:
-                    self.hash_modes[int(hash_mode_match.group("id"))] = {
-                        "id": int(hash_mode_match.group("id")),
-                        "name": hash_mode_match.group("name"),
-                        "description": hash_mode_match.group("description"),
-                    }
+                section_match = help_section_regex.match(line)
+                if section_match:
+                    help_section = section_match.group("section_name").strip()
+                    continue
+
+                if help_section and help_section.lower() == "hash modes":
+                    hash_mode_match = hash_mode_regex.match(line)
+                    if hash_mode_match:
+                        hash_mode_id = int(hash_mode_match.group("id"))
+                        self.hash_modes[hash_mode_id] = {
+                            "id": hash_mode_id,
+                            "name": hash_mode_match.group("name").strip(),
+                            "description": hash_mode_match.group("description").strip(),
+                        }
+
+        # Prefer legacy --help output, but fall back to -hh which prints hash modes on >=7.x
+        parse_from_args([self.binary, '--help'])
+        if not self.hash_modes:
+            parse_from_args([self.binary, '-hh'])
+
+        if not self.hash_modes:
+            raise Exception(
+                "Unable to parse hash modes from hashcat help output. Ensure the configured binary supports -hh or update the parser.")
+
     """
         Parse rule directory
     """
+
     @classmethod
     def parse_rules(self):
         self.rules = {}
 
-        file_list = [join(self.rules_dir, f) for f in listdir(self.rules_dir) if isfile(join(self.rules_dir, f)) and f != ".gitkeep"]
+        file_list = [join(self.rules_dir, f) for f in listdir(self.rules_dir) if
+                     isfile(join(self.rules_dir, f)) and f != ".gitkeep"]
 
         for file in file_list:
             with open(file, "rb") as f:
@@ -114,11 +172,13 @@ class Hashcat(object):
     """
         Parse wordlist directory
     """
+
     @classmethod
     def parse_wordlists(self):
         self.wordlists = {}
 
-        file_list = [join(self.wordlist_dir, f) for f in listdir(self.wordlist_dir) if isfile(join(self.wordlist_dir, f)) and f != ".gitkeep"]
+        file_list = [join(self.wordlist_dir, f) for f in listdir(self.wordlist_dir) if
+                     isfile(join(self.wordlist_dir, f)) and f != ".gitkeep"]
 
         for file in file_list:
             with open(file, "rb") as f:
@@ -155,11 +215,13 @@ class Hashcat(object):
     """
         Parse mask directory
     """
+
     @classmethod
     def parse_masks(self):
         self.masks = {}
 
-        file_list = [join(self.mask_dir, f) for f in listdir(self.mask_dir) if isfile(join(self.mask_dir, f)) and f != ".gitkeep"]
+        file_list = [join(self.mask_dir, f) for f in listdir(self.mask_dir) if
+                     isfile(join(self.mask_dir, f)) and f != ".gitkeep"]
 
         for file in file_list:
             with open(file, "rb") as f:
@@ -196,8 +258,10 @@ class Hashcat(object):
     """
         Create a new session
     """
+
     @classmethod
-    def create_session(self, name, crack_type, hash_file, hash_mode_id, wordlist, rule, mask, username_included, device_type, brain_mode, end_timestamp, hashcat_debug_file):
+    def create_session(self, name, crack_type, hash_file, hash_mode_id, wordlist, rule, mask, username_included,
+                       device_type, brain_mode, end_timestamp, hashcat_debug_file):
 
         if name in self.sessions:
             raise Exception("This session name has already been used")
@@ -213,6 +277,10 @@ class Hashcat(object):
 
         if not brain_mode in [0, 1, 2, 3]:
             raise Exception("Unsupported brain mode: %d" % brain_mode)
+
+        rule_path: Optional[str] = None
+        wordlist_path: Optional[str] = None
+        mask_path: Optional[str] = None
 
         if crack_type == "dictionary":
             if rule != None and not rule in self.rules:
@@ -233,11 +301,15 @@ class Hashcat(object):
             mask_path = self.masks[mask]["path"]
             rule_path = None
             wordlist_path = None
+        else:
+            raise Exception("Unsupported cracking type: %s" % crack_type)
 
-        pot_file = os.path.join(os.path.dirname(__file__), "potfiles", ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".potfile")
+        pot_file = os.path.join(os.path.dirname(__file__), "potfiles", ''.join(
+            random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".potfile")
 
         if hashcat_debug_file:
-            output_file = os.path.join(os.path.dirname(__file__), "outputs", ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".output")
+            output_file = os.path.join(os.path.dirname(__file__), "outputs", ''.join(
+                random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".output")
         else:
             output_file = None
 
@@ -245,7 +317,7 @@ class Hashcat(object):
             name=name,
             crack_type=crack_type,
             hash_file=hash_file,
-            pot_file = pot_file,
+            pot_file=pot_file,
             hash_mode_id=hash_mode_id,
             wordlist_file=wordlist_path,
             rule_file=rule_path,
@@ -271,6 +343,7 @@ class Hashcat(object):
     """
         Remove a session
     """
+
     @classmethod
     def remove_session(self, name):
 
@@ -287,6 +360,7 @@ class Hashcat(object):
     """
         Reload sessions
     """
+
     @classmethod
     def reload_sessions(self):
 
@@ -301,6 +375,7 @@ class Hashcat(object):
     """
         Upload a new rule file
     """
+
     @classmethod
     def upload_rule(self, name, rules):
 
@@ -328,6 +403,7 @@ class Hashcat(object):
     """
         Upload a new mask file
     """
+
     @classmethod
     def upload_mask(self, name, masks):
 
@@ -355,6 +431,7 @@ class Hashcat(object):
     """
         Upload a new wordlist file
     """
+
     @classmethod
     def upload_wordlist(self, name, wordlists):
 
@@ -382,6 +459,7 @@ class Hashcat(object):
     """
         Returns the number of running/paused hashcat sessions
     """
+
     @classmethod
     def number_ongoing_sessions(self):
         number = 0
@@ -391,6 +469,7 @@ class Hashcat(object):
                 number += 1
 
         return number
+
 
 class Session(Model):
     name = CharField(unique=True)
@@ -414,15 +493,40 @@ class Session(Model):
     class Meta:
         database = database
 
+    if TYPE_CHECKING:
+        name: str
+        crack_type: str
+        hash_file: str
+        pot_file: str
+        hash_mode_id: int
+        rule_file: Optional[str]
+        wordlist_file: Optional[str]
+        mask_file: Optional[str]
+        username_included: bool
+        device_type: int
+        brain_mode: int
+        end_timestamp: Optional[int]
+        output_file: Optional[str]
+        session_status: str
+        time_started: Optional[datetime]
+        progress: float
+        reason: str
+
+    @staticmethod
+    def _require_win32console() -> Any:
+        if win32console is None:
+            raise RuntimeError("win32console support is unavailable on this platform")
+        return win32console
+
     def setup(self):
         # File to store the processes output
         random_name = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12))
-        self.result_file = os.path.join(tempfile.gettempdir(), random_name+".cracked")
+        self.result_file = os.path.join(tempfile.gettempdir(), random_name + ".cracked")
 
         # File to store the hashcat output
         random_name = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12))
-        self.hashcat_output_file = os.path.join(tempfile.gettempdir(), random_name+".hashcat")
-        open(self.hashcat_output_file,'a').close()
+        self.hashcat_output_file = os.path.join(tempfile.gettempdir(), random_name + ".hashcat")
+        open(self.hashcat_output_file, 'a').close()
 
         self.hash_type = "N/A"
         self.time_estimated = "N/A"
@@ -446,32 +550,38 @@ class Session(Model):
     def session_thread(self):
         # Prepare regex to parse the main hashcat process output
         regex_list = [
-            ("hash_type", re.compile("^Hash\.Type\.+: +(.*)\s*$")),
-            ("speed", re.compile("^Speed\.#1\.+: +(.*)\s*$")),
+            ("hash_type", re.compile(r"^Hash\.Type\.+: +(.*)\s*$")),
+            ("speed", re.compile(r"^Speed\.#1\.+: +(.*)\s*$")),
         ]
         if self.crack_type == "dictionary":
-            regex_list.append(("progress", re.compile("^Progress\.+: +\d+/\d+ \((\S+)%\)\s*$")))
-            regex_list.append(("time_estimated", re.compile("^Time\.Estimated\.+: +(.*)\s*$")))
+            regex_list.append(("progress", re.compile(r"^Progress\.+: +\d+/\d+ \((\S+)%\)\s*$")))
+            regex_list.append(("time_estimated", re.compile(r"^Time\.Estimated\.+: +(.*)\s*$")))
         elif self.crack_type == "mask":
-            regex_list.append(("progress", re.compile("^Input\.Mode\.+: +Mask\s+\(\S+\)\s+\[\d+\]\s+\((\S+)%\)\s*$")))
+            regex_list.append(("progress", re.compile(r"^Input\.Mode\.+: +Mask\s+\(\S+\)\s+\[\d+]\s+\((\S+)%\)\s*$")))
 
-        self.time_started = str(datetime.now())
+        self.time_started = datetime.now(UTC)
 
+        cmd_line: List[str]
         if not self.session_status in ["Aborted"]:
             # Command lines used to crack the passwords
             if self.crack_type == "dictionary":
                 if self.rule_file != None:
-                    cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0', '-m', str(self.hash_mode_id), self.hash_file, self.wordlist_file, '-r', self.rule_file]
+                    cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0', '-m',
+                                str(self.hash_mode_id), self.hash_file, self.wordlist_file, '-r', self.rule_file]
                 else:
-                    cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0', '-m', str(self.hash_mode_id), self.hash_file, self.wordlist_file]
-            if self.crack_type == "mask":
-                cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '3', '-m', str(self.hash_mode_id), self.hash_file, self.mask_file]
+                    cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0', '-m',
+                                str(self.hash_mode_id), self.hash_file, self.wordlist_file]
+            elif self.crack_type == "mask":
+                cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '3', '-m', str(self.hash_mode_id),
+                            self.hash_file, self.mask_file]
+            else:
+                raise ValueError(f"Unsupported crack type: {self.crack_type}")
             if self.username_included:
                 cmd_line += ["--username"]
             if self.device_type:
                 cmd_line += ["-D", str(self.device_type)]
             # workload profile
-            cmd_line += ["--workload-profile", Hashcat.workload_profile]
+            cmd_line += ["--workload-profile", str(Hashcat.workload_profile)]
             # set pot file
             cmd_line += ["--potfile-path", self.pot_file]
         else:
@@ -491,29 +601,32 @@ class Session(Model):
             f.write("Command: %s\n" % " ".join(cmd_line))
 
         self.session_status = "Running"
-        self.time_started = datetime.utcnow()
+        self.time_started = datetime.now(UTC)
         self.save()
 
         if os.name == 'nt':
+            console = self._require_win32console()
             # To controlhashcat on Windows, very different implementation than on linux
             # Look at:
             # https://github.com/hashcat/hashcat/blob/9dffc69089d6c52e6f3f1a26440dbef140338191/src/terminal.c#L477
-            free_console=True
+            free_console = True
             try:
-                win32console.AllocConsole()
-            except win32console.error as exc:
-                if exc.winerror!=5:
+                console.AllocConsole()
+            except console.error as exc:
+                if exc.winerror != 5:
                     raise
                 ## only free console if one was created successfully
-                free_console=False
+                free_console = False
 
-            self.win_stdin = win32console.GetStdHandle(win32console.STD_INPUT_HANDLE)
+            self.win_stdin = console.GetStdHandle(console.STD_INPUT_HANDLE)
 
         # cwd needs to be added for Windows version of hashcat
         if os.name == 'nt':
-            self.session_process = subprocess.Popen(cmd_line, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=os.path.dirname(Hashcat.binary))
+            self.session_process = subprocess.Popen(cmd_line, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                    cwd=os.path.dirname(Hashcat.binary))
         else:
-            self.session_process = subprocess.Popen(cmd_line, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE, cwd=os.path.dirname(Hashcat.binary))
+            self.session_process = subprocess.Popen(cmd_line, stdout=subprocess.PIPE, stdin=subprocess.PIPE,
+                                                    stderr=subprocess.PIPE, cwd=os.path.dirname(Hashcat.binary))
 
         self.update_session()
 
@@ -542,16 +655,15 @@ class Session(Model):
 
             # check timestamp
             if self.end_timestamp:
-                current_timestamp = int(datetime.utcnow().timestamp())
+                current_timestamp = int(datetime.now(UTC).timestamp())
 
                 if current_timestamp > self.end_timestamp:
                     self.quit()
                     break
 
-
         return_code = self.session_process.wait()
         # The cracking ended, set the parameters accordingly
-        if return_code in [255,254]:
+        if return_code in [255, 254]:
             self.session_status = "Error"
             if return_code == 254:
                 self.reason = "GPU-watchdog alarm"
@@ -560,7 +672,7 @@ class Session(Model):
                 error_msg = self.session_process.stderr.read().decode()
                 error_msg = ansi_escape.sub('', error_msg).strip()
                 self.reason = error_msg
-        elif return_code in [2,3,4]:
+        elif return_code in [2, 3, 4]:
             self.session_status = "Aborted"
             self.reason = ""
         else:
@@ -577,9 +689,9 @@ class Session(Model):
             "device_type": self.device_type,
             "rule": os.path.basename(self.rule_file)[:-5] if self.rule_file else None,
             "mask": os.path.basename(self.mask_file)[:-7] if self.mask_file else None,
-            "wordlist": os.path.basename(self.wordlist_file)[:-1*len(".wordlist")] if self.wordlist_file else None,
+            "wordlist": os.path.basename(self.wordlist_file)[:-1 * len(".wordlist")] if self.wordlist_file else None,
             "status": self.session_status,
-            "time_started": str(self.time_started),
+            "time_started": self.time_started.isoformat() if self.time_started else None,
             "time_estimated": self.time_estimated,
             "speed": self.speed,
             "progress": self.progress,
@@ -589,6 +701,7 @@ class Session(Model):
     """
         Returns the first 100000 lines from the potfile starting from a specific line
     """
+
     def get_potfile(self, from_line):
         line_count = 0
         selected_line_count = 0
@@ -622,23 +735,24 @@ class Session(Model):
                 "potfile_data": "",
             }
 
-
     """
         Returns hashcat output file
     """
+
     def hashcat_output(self):
         return open(self.hashcat_output_file).read()
 
     """
         Returns hashes file
     """
+
     def hashes(self):
         return open(self.hash_file).read()
-
 
     """
         Cleanup the session before deleting it
     """
+
     def remove(self):
         self.quit()
 
@@ -662,6 +776,7 @@ class Session(Model):
     """
         Return cracked passwords
     """
+
     def cracked(self):
 
         # gather cracked passwords
@@ -680,22 +795,25 @@ class Session(Model):
     """
         Update the session
     """
+
     def update_session(self):
         self.status()
 
     """
         Update the session
     """
+
     def status(self):
         if not self.session_status in ["Paused", "Running"]:
             return
 
         if os.name == 'nt':
-            evt = win32console.PyINPUT_RECORDType(win32console.KEY_EVENT)
+            console = self._require_win32console()
+            evt = console.PyINPUT_RECORDType(console.KEY_EVENT)
             evt.Char = 's'
             evt.RepeatCount = 1
             evt.KeyDown = True
-            evt.VirtualKeyCode=0x0
+            evt.VirtualKeyCode = 0x0
             self.win_stdin.WriteConsoleInput([evt])
         else:
             try:
@@ -707,16 +825,18 @@ class Session(Model):
     """
         Pause the session
     """
+
     def pause(self):
         if not self.session_status in ["Paused", "Running"]:
             return
 
         if os.name == 'nt':
-            evt = win32console.PyINPUT_RECORDType(win32console.KEY_EVENT)
+            console = self._require_win32console()
+            evt = console.PyINPUT_RECORDType(console.KEY_EVENT)
             evt.Char = 'p'
             evt.RepeatCount = 1
             evt.KeyDown = True
-            evt.VirtualKeyCode=0x0
+            evt.VirtualKeyCode = 0x0
             self.win_stdin.WriteConsoleInput([evt])
         else:
             try:
@@ -730,16 +850,18 @@ class Session(Model):
     """
         Resume the session
     """
+
     def resume(self):
         if not self.session_status in ["Paused", "Running"]:
             return
 
         if os.name == 'nt':
-            evt = win32console.PyINPUT_RECORDType(win32console.KEY_EVENT)
+            console = self._require_win32console()
+            evt = console.PyINPUT_RECORDType(console.KEY_EVENT)
             evt.Char = 'r'
             evt.RepeatCount = 1
             evt.KeyDown = True
-            evt.VirtualKeyCode=0x0
+            evt.VirtualKeyCode = 0x0
             self.win_stdin.WriteConsoleInput([evt])
         else:
             try:
@@ -753,16 +875,18 @@ class Session(Model):
     """
         Quit the session
     """
+
     def quit(self):
         if not self.session_status in ["Paused", "Running"]:
             return
 
         if os.name == 'nt':
-            evt = win32console.PyINPUT_RECORDType(win32console.KEY_EVENT)
+            console = self._require_win32console()
+            evt = console.PyINPUT_RECORDType(console.KEY_EVENT)
             evt.Char = 'q'
             evt.RepeatCount = 1
             evt.KeyDown = True
-            evt.VirtualKeyCode=0x0
+            evt.VirtualKeyCode = 0x0
             self.win_stdin.WriteConsoleInput([evt])
         else:
             try:

@@ -1,23 +1,20 @@
 #!/usr/bin/python3
-import os
-import sys
-import traceback
+import base64
+import hashlib
 import json
-import ssl
-import datetime
+import os
 import random
 import string
-import hashlib
+import traceback
+from pathlib import Path
 
-import socketserver
-import base64
-from flask import Flask, request, abort, send_file
+from flask import Flask, request
 from flask_httpauth import HTTPBasicAuth
-from io import BytesIO, StringIO
 
 from hashcat import Hashcat
 
 auth = HTTPBasicAuth()
+
 
 @auth.verify_password
 def verify_password(username, password):
@@ -25,6 +22,7 @@ def verify_password(username, password):
     global httpauth_hash
     if username == httpauth_user and httpauth_hash == hashlib.sha256(password.encode()).hexdigest():
         return username
+
 
 class Server:
 
@@ -46,7 +44,8 @@ class Server:
         self._app.add_url_rule("/sessionInfo/<session_name>", "sessionInfo", self._sessionInfo, methods=["GET"])
         self._app.add_url_rule("/hashcatOutput/<session_name>", "hashcatOutput", self._hashcatOutput, methods=["GET"])
         self._app.add_url_rule("/hashes/<session_name>", "hashes", self._hashes, methods=["GET"])
-        self._app.add_url_rule("/getPotfile/<session_name>/<from_line>", "getPotfile", self._get_potfile, methods=["GET"])
+        self._app.add_url_rule("/getPotfile/<session_name>/<from_line>", "getPotfile", self._get_potfile,
+                               methods=["GET"])
         self._app.add_url_rule("/cracked/<session_name>", "cracked", self._cracked, methods=["GET"])
         self._app.add_url_rule("/createSession", "createSession", self._createSession, methods=["POST"])
         self._app.add_url_rule("/removeSession/<session_name>", "removeSession", self._removeSession, methods=["GET"])
@@ -74,10 +73,11 @@ class Server:
                 - % cracked
                 - % progress
     """
+
     @auth.login_required
     def _hashcatInfo(self):
         try:
-            hash_types = list(Hashcat.hash_modes.values())
+            hash_types = [Hashcat.hash_modes[idx] for idx in sorted(Hashcat.hash_modes.keys())]
             rules = Hashcat.rules
             masks = Hashcat.masks
             wordlists = Hashcat.wordlists
@@ -124,6 +124,7 @@ class Server:
             - Password lengths
             - Password charsets
     """
+
     @auth.login_required
     def _sessionInfo(self, session_name):
         try:
@@ -143,6 +144,7 @@ class Server:
     """
         Returns session hashcat output
     """
+
     @auth.login_required
     def _hashcatOutput(self, session_name):
         try:
@@ -163,6 +165,7 @@ class Server:
     """
         Returns session hashes
     """
+
     @auth.login_required
     def _hashes(self, session_name):
         try:
@@ -183,6 +186,7 @@ class Server:
     """
         Returns the potfile starting from a specific line
     """
+
     @auth.login_required
     def _get_potfile(self, session_name, from_line):
         from_line = int(from_line)
@@ -202,6 +206,7 @@ class Server:
     """
         Returns the cracked passwords
     """
+
     @auth.login_required
     def _cracked(self, session_name):
         try:
@@ -219,7 +224,6 @@ class Server:
                 "message": str(e),
             })
 
-
     """
         Create a new session, the input should be the following :
             - name: name of the session
@@ -231,16 +235,18 @@ class Server:
             - mask: mask file to use (if mask-based attack)
             - username_included: is the username before the hashes ? (True/False)
     """
+
     @auth.login_required
     def _createSession(self):
         try:
             data = json.loads(request.form.get('json'))
 
             random_name = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12))
-            hash_file = os.path.join(self.hash_directory, data["name"]+"_"+random_name+".list")
+            hash_dir = Path(self.hash_directory)
+            hash_file = hash_dir / f"{data['name']}_{random_name}.list"
 
             file = request.files['file']
-            file.save(hash_file)
+            file.save(str(hash_file))
 
             Hashcat.create_session(
                 data["name"],
@@ -271,6 +277,7 @@ class Server:
     """
         Delete a session
     """
+
     @auth.login_required
     def _removeSession(self, session_name):
         try:
@@ -293,6 +300,7 @@ class Server:
             - session: session name
             - action: start, update, pause, resume, quit or remove
     """
+
     @auth.login_required
     def _action(self):
         try:
@@ -328,6 +336,7 @@ class Server:
             - name: rule file name
             - rules: content of the file
     """
+
     @auth.login_required
     def _upload_rule(self):
         try:
@@ -352,6 +361,7 @@ class Server:
             - name: mask file name
             - masks: content of the file
     """
+
     @auth.login_required
     def _upload_mask(self):
         try:
@@ -376,6 +386,7 @@ class Server:
             - name: wordlist file name
             - wordlists: content of the file
     """
+
     @auth.login_required
     def _upload_wordlist(self):
         try:

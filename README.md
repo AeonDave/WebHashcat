@@ -1,248 +1,171 @@
 # WebHashcat
-Hashcat web interface
 
-WebHashcat is a very simple but efficient web interface for hashcat password cracking tool.
-It hash the following features:
-* Distributed cracking sessions between multiple server (you only need to install HashcatNode on the remote server)
-* Cracked hashes are displayed almost as soon as they are cracked
-* Cracking session restore (for example after host reboot)
-* Upload plaintext files for analytics purposes
-* Search patterns through the entire database
-* Analytics
+Modern Hashcat orchestration with a Django web UI, Celery workers, and Docker-first workflows.
 
-Currently WebHashcat supports rule-based and mask-based attack mode
+> This fork tracks the original project from https://github.com/hegusung/WebHashcat and keeps it current with Python 3.11, docker compose profiles, and hashcat 7.1.2 (CPU and CUDA).
 
-This project is composed of 2 parts: 
-- WebHashcat, the web interface made with the django framework 
-- HashcatNode, A hashcat wrapper which creates an API over hashcat
+## Contents
 
-## WebHashcat Usage
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Quick start (Docker)](#quick-start-docker)
+- [Managing nodes and assets](#managing-nodes-and-assets)
+- [Manual installation](#manual-installation)
+- [Operating-system improvements](#operating-system-improvements)
 
-### Adding rules, masks and wordlists to webhashcat
+---
 
-Go to the Hashcat > Files page, than simply use the upload button to add new files. Note that uploaded files are added to webhashcat but not deployed to nodes yet.
+## Overview
 
-<p align="center"><img src="./screenshots/webhashcat_files.png" alt="Rules/Masks/Wordlists"></p>
+WebHashcat exposes the hashcat CLI through a Django application and a lightweight HTTPS node agent.
 
-### Registering a node
+- Distributed orchestration: register many GPU or CPU nodes, sync them, and trigger cracking jobs remotely.
+- Multiple attack modes: dictionary (rules plus wordlists) and mask attacks with live status, resume, and statistics.
+- Near real-time visibility: cracked hashes appear immediately, global potfiles stay synchronized, and the UI offers search and analytics.
+- Shared storage: uploaded hashfiles, rules, masks, and wordlists live under `WebHashcat/Files/**` and are mounted in both the `web` and `celery` containers.
+- Safe workloads: Celery tasks and per-hashfile locks prevent long-running operations from stepping on each other.
 
-The nodes can be simply added and removed on the Node page, you only need to define the ip, port, username and password (as defined in the hashcatnode configuration script).
+## Architecture
 
-<p align="center"><img src="./screenshots/webhashcat_node_list.png" alt="Node list"></p>
-
-Once a node is registered, click on the node and hit the synchronise button on the top. Rules, Masks and Wordlists should now be uploaded to the node (all files should be green).
-
-<p align="center"><img src="./screenshots/webhashcat_node.png" alt="Node"></p>
-
-### Adding a hashfile
-
-In the hashcat page, simply hit the bottom "add" button to upload a new hashfile, after comparing the new hashfile to the centralised potfile (can take a few minutes with huge hashfiles), your hashfile should appear in the list.
-
-### Creating a cracking session
-
-Simply hit the "+" button on the left of the hashfile, then select the desired cracking method. Note that sessions aren't started automatically, you will need to use the "play" button to start them.
-
-<p align="center"><img src="./screenshots/webhashcat_hashfile_list.png" alt="Hashfile list"></p>
-
-If you set the cron to 5 minutes, the central potfile will be updated every 5 minutes with newly cracked hashes.
-
-Simply click on the hashfile to view the results, it can take few seconds on huge hashfiles. Note that you can also download the results on both the hashfile list and hashfile views.
-
-<p align="center"><img src="./screenshots/webhashcat_hashfile.png" alt="Hashfile details"></p>
-
-### Search for ŝpecific patterns in usernames
-
-Using this functionality you can easily search from client's email addresses in leaks uploaded in webhashcat. Simply provide a string you want to look for in the username and select in which hashfiles you want to look for it. Once the research in the database is done, you should be able to download the results. If you add a new hashfile afterwards, you can simply click on the 'reload' button and WebHashcat will search again in the whole database.
-
-<p align="center"><img src="./screenshots/webhashcat_searches.png" alt="Hashfile details"></p>
-
-## Install
-
-### HashcatNode
-
-#### Using docker
-
-If you are using docker on Windows (or WSL), change the Dockerfile:
 ```
-FROM dizcza/docker-hashcat:latest
-# to:
-FROM dizcza/docker-hashcat:cuda
++----------------------+    TLS + Basic Auth    +----------------------+
+| WebHashcat           |<---------------------->| HashcatNode          |
+| Django + Celery      |   /hashcatInfo, etc.   | Flask API + hashcat  |
++-----------+----------+                        +-----------+----------+
+            | shared volume (Files/)                        | local pot/output
+            v                                               v
+     Hashfiles, rules, masks, wordlists             GPU or CPU worker hosts
 ```
 
-First install nvidia-docker:
-```
-curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
-sudo apt-get update
-sudo apt-get install -y nvidia-docker2
-sudo pkill -SIGHUP dockerd
-```
+- The Django monolith (apps: Hashcat, Nodes, Utils, API, Auth) relies on MySQL and Redis.
+- HashcatNode is a Flask HTTPS API with Peewee + SQLite state, TLS certs, and the native hashcat binary.
+- Communication always flows through `Utils/hashcatAPI.py`; there is no direct DB or SSH access to worker nodes.
 
-Then, run the following docker command:
+## Quick start (Docker)
+
+Requirements: Docker Engine 24+, the `docker compose` plugin 2.29+, and (for CUDA) the NVIDIA Container Toolkit with drivers that support CUDA 12 or newer.
+
+### 1. Start the web stack
+
 ```
-docker-compose up -d --build
-```
-
-The default credentials are: test:test
-
-Change them by editing the docker-compose.yml config file
-
-#### Manual install
-
-HashcatNode can be run on both Windows and Python
-
-Windows limitation:
-Only **one** cracking session can be running/paused at a time
-
-Install the pip packages:
-```
-pip3 install -r requirements.txt
-```
-If you are running it on Windows, install also the pywin32 package
-```
-pip3 install pywin32
+cd WebHashcat/
+docker compose up -d --build
 ```
 
-Rename the `settings.ini.sample` file to `settings.ini` and fill the parameters accordingly.
+- Creates the shared bridge network `webhashcat-net`.
+- Starts MySQL, Redis, the Django web container, and the Celery worker. Files under `WebHashcat/Files` are bind-mounted.
+- The UI listens on `http://127.0.0.1:8000` (credentials come from `variables.env`).
 
-The rules, mask and wordlist directory must be writable by the user running hashcatnode
+### 2. Start one or more nodes
 
-the hashcatnode can be run simply by running `./hashcatnode.py`
+```
+cd HashcatNode/
 
-* Create the database (sqlite)
-Run the script (HashcatNode folder)
-```
-./create_database.py
-```
+# GPU / CUDA build (default hashcat v7.1.2)
+docker compose --profile cuda up -d --build
 
-* Create the node certificates (Install a Windows version of OpenSSL if you are running HashcatNode on Windows)
-```
-openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes
-```
+# CPU-only build
+docker compose --profile cpu up -d --build
 
-* HashcatNode can be started manually by:
-```
-python3 hashcatnode.py
+# Override the bundled hashcat version
+HASHCAT_VERSION=v7.1.3 docker compose --profile cuda up -d --build
 ```
 
-* Register as a service (systemd) (linux only)
-Edit the systemd/hashcatnode.service file to match your setup, then copy it to /etc/systemd/system/ 
+- Both `hashcatnode-cuda` and `hashcatnode-cpu` automatically attach to `webhashcat-net`.
+- CUDA profile expects `nvidia-container-toolkit`; CPU profile works everywhere.
+- Override the Basic-Auth credentials via `HASHCATNODE_USERNAME` and `HASHCATNODE_HASH` (sha256 of the password).
 
-##### Dependencies
+### 3. Register and synchronise a node
 
-- python3
-- flask
-- flask-basicauth
-- peewee
-- hashcat >= 3
+1. Open `http://127.0.0.1:8000` and go to **Nodes**.
+2. Create a node with hostname `hashcatnode-cpu` (or `hashcatnode-cuda`), port `9999`, and the credentials configured above.
+3. Open the node detail page and click **Synchronise**. Rules, masks, wordlists, and hash type metadata are pushed to the node.
 
-### WebHashcat
+Tip: Nodes on other machines do not need the shared Docker network. Just publish port 9999 on the host and register the node with that host/IP in the Web UI.
 
-#### Using docker
+### 4. Upload assets and launch sessions
 
-docker-compose >= 2.29 is required, you can install it using the following guide:
-https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-compose-on-ubuntu-20-04
+- Use **Hashcat → Files** to upload hashfiles, wordlists, masks, and rules. Uploaded files stay under `WebHashcat/Files/**` until removed.
+- From **Hashcat → Hashfiles**, click **Add** to import a new hashfile. Use the `+` button beside a hashfile to define a cracking session, then hit **Play** to start it.
+- Sessions stream progress back to the UI; Celery workers keep the potfile and cracked counts in sync.
 
-Then, run the following command:
-```
-docker-compose up -d --build
-```
+Screenshots:
 
-WebHashcat should be available on port 8000
+<p style="text-align:center;"><img src="./screenshots/webhashcat_hashfile_list.png" alt="Hashfile list"></p>
 
-#### Manual install
+<p style="text-align:center;"><img src="./screenshots/webhashcat_node.png" alt="Node details"></p>
 
-##### Installing Packages
+<p style="text-align:center;"><img src="./screenshots/webhashcat_searches.png" alt="Search view"></p>
 
-Install the following packages:
-```
-apt install mysql-server
-apt install libmysqlclient-dev
-apt install redis
-apt install supervisor
-```
+## Managing nodes and assets
 
-Install the pip packages:
-```
-pip3 install -r requirements.txt
-```
+- Rules, masks, and wordlists can be uploaded through the UI or via `Utils/upload_file.py`. Synchronise a node to push updated versions (MD5 checks prevent redundant uploads).
+- Hash types are now parsed from `hashcat -hh`, so new hashcat releases only require rebuilding the node container with a newer `HASHCAT_VERSION`.
+- Each cracking session stores its own potfile and optional debug output under `HashcatNode/potfiles` and `HashcatNode/outputs`. Start, pause, resume, and quit actions can be issued from the Web UI.
+- Windows nodes still allow only one running session at a time (hashcat limitation).
+- The **Searches** page lets you query usernames or email fragments across every imported hashfile and download the results.
 
-##### Creating the database
+## Manual installation
 
-Create the database using the following command to ensure you can insert utf8 usernames/passwords
-```
-mysql> CREATE DATABASE webhashcat CHARACTER SET utf8;
-mysql> CREATE USER webhashcat IDENTIFIED BY '<insert_password_here>';
-mysql> GRANT ALL PRIVILEGES ON webhashcat.* TO 'webhashcat';
-```
+Docker is strongly recommended, but bare-metal steps remain for completeness.
 
-##### Configuration
+### HashcatNode (Linux or Windows)
 
-WebHashcat is a django application using mysql database, its installation is done this way:
-* Copy `Webhashcat/settings.py.sample` file to `WebHashcat/settings.py`
-* Edit it:
-- Change the SECRET_KEY parameter
-You can generate a random secret key by running this in a python shell
-```
-from django.utils.crypto import get_random_string
+1. Install Python 3 and the required packages:
+   ```
+   pip3 install -r requirements.txt
+   # On Windows also run: pip3 install pywin32
+   ```
+2. Copy `settings.ini.sample` to `settings.ini`, then set the hashcat binary path, hashes/rules/wordlists/masks directories, bind host/port, and credentials.
+3. Initialise local resources:
+   ```
+   python3 create_database.py
+   openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes
+   ```
+4. Start the node with `python3 hashcatnode.py`. Use `systemd/hashcatnode.service` on Linux or Task Scheduler/Services on Windows to keep it running.
 
-chars = 'abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)'
-get_random_string(50, chars)
-```
-- Add your webhashcat fqdn to ALLOWED_HOSTS
-- Set your mysql username and password in the DATABASES section
-- Set DEBUG = False if you are using it in production !
-you can refer to the following django documentation for further info: https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
+Limitations and dependencies:
 
-* Copy `settings.ini.sample` file to `settings.ini`
-* Edit `settings.ini` file
-- the potfile parameter doesn't need to be changed
+- Windows nodes can run or pause only one session at a time.
+- The hashes, rules, masks, and wordlists directories must be writable by the service user.
+- Dependencies: Python 3, Flask, flask-basicauth, Peewee, hashcat 3+, OpenSSL for TLS certs.
 
-* Create the tables with django
-```
-./manage.py makemigrations
-./manage.py migrate
-```
+### WebHashcat (Linux)
 
-* Create the user to access the interface
-```
-./manage.py createsuperuser
-```
+1. Install system packages and Python dependencies:
+   ```
+   apt install mysql-server libmysqlclient-dev redis supervisor
+   pip3 install -r requirements.txt
+   ```
+2. Create the MySQL database:
+   ```
+   CREATE DATABASE webhashcat CHARACTER SET utf8;
+   CREATE USER 'webhashcat' IDENTIFIED BY '<password>';
+   GRANT ALL PRIVILEGES ON webhashcat.* TO 'webhashcat';
+   ```
+3. Configure Django:
+   - Copy `WebHashcat/settings.py.sample` to `WebHashcat/settings.py`, then set `SECRET_KEY`, database credentials, and `ALLOWED_HOSTS`.
+   - Copy `settings.ini.sample` to `settings.ini` and set the host hashcat binary path plus potfile location.
+   - Run migrations and create a superuser:
+     ```
+     python manage.py makemigrations
+     python manage.py migrate
+     python manage.py createsuperuser
+     ```
+4. Development: `python manage.py runserver 0.0.0.0:8000`.
+5. Production: deploy behind gunicorn/uwsgi plus nginx or Apache, and use the Supervisor configs from `supervisor/` to run the Celery worker and beat.
 
-##### Setting up the web server
+Dependencies: Python 3, Django 2+, mysqlclient, humanize, requests (and requests-toolbelt), Celery, Redis, supervisor, hashcat 3+.
 
-* If you want to test the interface without setting up a web server use this command:
-```
-./manage.py runserver
-```
+## Operating-system improvements
 
-* If you want to set up the interface with a proper webserver like apache or nginx please refer to the following documentation:
-https://docs.djangoproject.com/en/2.0/howto/deployment/wsgi/modwsgi/
+Large datasets (10 million+ hashes) benefit from a few system tweaks:
 
-##### Setting up supervisor
+- Increase `/tmp` or point MySQL temp storage to a larger volume so big imports do not exhaust disk.
+- Keep some swap available, especially on GPU nodes that can spike RAM usage.
+- For MySQL InnoDB installations, raise `innodb_buffer_pool_size` so the `Hashcat_hash` table stays responsive.
+- Periodically prune `WebHashcat/Files/tmp` if you upload extremely large files outside the normal Celery cleanup cadence.
 
-Supervisor is the deamon which is responsible of heavy background tasks such as pulling latest results from the nodes or importing hashfiles.
+---
 
-* After installing supervisor, copy the configuration files from the Webhashcat/supervisor folder to the /etc/supervisor/conf.d/ folder.
-* Once done, edit them to match your configuration
-
-##### Dependencies
-
-- python3
-- django >= 2
-- hashcat >= 3
-- mysqlclient
-- humanize
-- requests
-- requests-toolbelt
-- celery
-- redis
-- supervisor
-
-## Operating System improvements
-
-If you are willing to process more than 10M hashes, I recommend you to apply the following mofication to your system:
-* Increase the your /tmp size: Mysql tends to put a lot of data in the /tmp directory when processing huge hashfiles
-* Increase your swap partition size
-* If you use InnoDB tables in you MySQL configuration, I recommend you to edit your my.cnf configuration file and increase the innodb_buffer_pool_size value. This way MySQL will be able to allocate sufficiant memory when updating cracked hashes.
+Questions, bugs, or feature ideas? Open an issue or pull request and help keep WebHashcat current.

@@ -1,6 +1,14 @@
+# --- Project configuration ---
 WebHashcat/WebHashcat/settings.py
 WebHashcat/settings.ini
 WebHashcat/db.sqlite3
+WebHashcat/celerybeat.pid
+WebHashcat/celerybeat-schedule
+HashcatNode/settings.ini
+HashcatNode/hashcatnode.db
+HashcatNode/hashcatnode.log
+
+# --- Uploaded / generated files ---
 WebHashcat/Files/potfile*
 WebHashcat/Files/tmp/*
 !WebHashcat/Files/tmp/.gitkeep
@@ -12,58 +20,49 @@ WebHashcat/Files/Rulefiles/*.rule
 WebHashcat/Files/Wordlistfiles/*.wordlist
 WebHashcat/Files/Searches/**
 !WebHashcat/Files/Searches/.gitkeep
-WebHashcat/celerybeat.pid
-WebHashcat/celerybeat-schedule
+
+# --- Hashcat node assets ---
 HashcatNode/*.crt
 HashcatNode/*.key
-HashcatNode/settings.ini
 HashcatNode/hashes/*.list
 HashcatNode/rules/*.rule
 HashcatNode/masks/*.hcmask
 HashcatNode/potfiles/*.potfile
 HashcatNode/wordlists/*.wordlist
 HashcatNode/outputs/*.output
-HashcatNode/hashcatnode.db
-HashcatNode/hashcatnode.log
-TODO
 
-# Byte-compiled / optimized / DLL files
+# --- Python cache / build output ---
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
-env/
 build/
-develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
-parts/
 sdist/
+develop-eggs/
+parts/
 var/
 *.egg-info/
 .installed.cfg
 *.egg
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+# --- Virtual environments ---
+env/
+venv/
+ENV/
+.venv/
+
+# --- PyInstaller / packaging ---
 *.manifest
 *.spec
-
-# Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage reports
+# --- Tests / coverage ---
 htmlcov/
 .tox/
 .coverage
@@ -71,48 +70,32 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
-*,cover
+*.cover
 .hypothesis/
 
-# Translations
+# --- Translations / docs ---
 *.mo
 *.pot
-
-# Django stuff:
-*.log
-local_settings.py
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
 docs/_build/
 
-# PyBuilder
-target/
+# --- Framework-specific ---
+*.log
+local_settings.py
+instance/
+.webassets-cache
+.scrapy
 
-# IPython Notebook
+# --- Tooling / metadata ---
 .ipynb_checkpoints
-
-# pyenv
 .python-version
-
-# celery beat schedule file
 celerybeat-schedule
-
-# dotenv
 .env
-
-# virtualenv
-venv/
-ENV/
-
-# Spyder project settings
+.env.*
+*.env
 .spyderproject
-
-# Rope project settings
 .ropeproject
+.idea/
+.vscode/
+.DS_Store
+node_modules/
+.github/

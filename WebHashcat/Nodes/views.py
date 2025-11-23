@@ -1,43 +1,23 @@
-import json
-import csv
-import random
-import string
-import os.path
-import tempfile
-import humanize
-import time
-import requests
-from collections import OrderedDict
-
-from django.shortcuts import render
-from django.shortcuts import redirect
-from django.template import loader
-from django.urls import reverse
-from django.http import HttpResponse
-from django.contrib.auth.decorators import login_required
-from django.middleware.csrf import get_token
-from django.db.models import Q, Count, BinaryField
-from django.db.models.functions import Cast
-from django.db import connection
-from django.contrib import messages
-from django.contrib.admin.views.decorators import staff_member_required
-
-
-from django.shortcuts import get_object_or_404
-
 from operator import itemgetter
 
-from .models import Node
+import requests
+from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.decorators import login_required
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
+from django.shortcuts import redirect
+from django.template import loader
 
-from Utils.hashcatAPI import HashcatAPI
-from Utils.hashcat import Hashcat
+from .models import Node
+from ..Utils.hashcat import Hashcat
+from ..Utils.hashcatAPI import HashcatAPI
+
 
 # Create your views here.
 
 @login_required
 @staff_member_required
 def nodes(request, error_msg=""):
-
     context = {}
     context["Section"] = "Nodes"
 
@@ -49,10 +29,10 @@ def nodes(request, error_msg=""):
     template = loader.get_template('Nodes/nodes.html')
     return HttpResponse(template.render(context, request))
 
+
 @login_required
 @staff_member_required
 def node(request, node_name, error_msg=""):
-
     context = {}
     context["Section"] = "Nodes"
 
@@ -73,6 +53,12 @@ def node(request, node_name, error_msg=""):
 
             hashcat_api = HashcatAPI(node_item.hostname, node_item.port, node_item.username, node_item.password)
             node_data = hashcat_api.get_hashcat_info()
+
+            if not node_data:
+                return node(request, node_name, error_msg="Unable to fetch node information (no response)")
+
+            if node_data.get("response") != "ok":
+                return node(request, node_name, error_msg=node_data.get("message", "Node returned an error"))
 
             rule_list = Hashcat.get_rules()
             mask_list = Hashcat.get_masks()
@@ -100,10 +86,16 @@ def node(request, node_name, error_msg=""):
         hashcat_api = HashcatAPI(node_item.hostname, node_item.port, node_item.username, node_item.password)
         node_data = hashcat_api.get_hashcat_info()
 
-        if node_data["response"] == "error":
-            return node(request, node_name, error_msg=node_data["message"])
+        if not node_data:
+            return nodes(request,
+                         error_msg="Unable to connect to node %s at: %s:%d" % (node_item.name, node_item.hostname,
+                                                                               node_item.port))
+
+        if node_data.get("response") == "error":
+            return node(request, node_name, error_msg=node_data.get("message", "Unknown node error"))
     except requests.exceptions.ConnectionError:
-        return nodes(request, error_msg="Unable to connect to node %s at: %s:%d" % (node_item.name, node_item.hostname, node_item.port))
+        return nodes(request, error_msg="Unable to connect to node %s at: %s:%d" % (node_item.name, node_item.hostname,
+                                                                                    node_item.port))
 
     rule_list = Hashcat.get_rules()
     mask_list = Hashcat.get_masks()
@@ -162,20 +154,20 @@ def new_node(request):
 
         if port > 0 and port < 65636:
             Node.objects.update_or_create(name=node_name,
-                    defaults={
-                        'name': node_name,
-                        'hostname': hostname,
-                        'port': port,
-                        'username': username,
-                        'password': password,
-                        }
-            )
+                                          defaults={
+                                              'name': node_name,
+                                              'hostname': hostname,
+                                              'port': port,
+                                              'username': username,
+                                              'password': password,
+                                          }
+                                          )
         return redirect('Nodes:nodes')
+
 
 @login_required
 @staff_member_required
 def delete_node(request, node_name):
-
     try:
         obj = Node.objects.get(name=node_name)
         obj.delete()
