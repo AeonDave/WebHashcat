@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('Hashcat', '0002_auto_20200610_1150'),
     ]

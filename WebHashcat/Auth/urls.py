@@ -4,6 +4,5 @@ from . import views
 
 app_name = 'Auth'
 urlpatterns = [
-        re_path(r'^$', views.auth, name='auth'),
+    re_path(r'^$', views.auth, name='auth'),
 ]
-

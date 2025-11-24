@@ -2,7 +2,11 @@
 
 sleep 2
 
-python3 manage.py migrate --noinput
+# Try standard migrate, then fallback to fake-initial if the schema already exists
+if ! python3 manage.py migrate --noinput; then
+  echo "Standard migrate failed, retrying with --fake-initial"
+  python3 manage.py migrate --noinput --fake-initial
+fi
 
 if [[ ! -z "${DJANGO_SUPERUSER_USERNAME}" ]]; then
 python3 -c "import os

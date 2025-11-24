@@ -13,9 +13,22 @@ services:
          - "9999:9999"
       environment:
          - NVIDIA_VISIBLE_DEVICES=all
-         - HASHCATNODE_USERNAME=${HASHCATNODE_USERNAME:-test}
-         - HASHCATNODE_HASH=${HASHCATNODE_HASH:-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08}
+         - HASHCATNODE_DEVICE_TYPE=2
+         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
+         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
+         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
+         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
       restart: unless-stopped
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+         - ./secrets:/run/secrets:ro
       deploy:
          resources:
             reservations:
@@ -27,26 +40,78 @@ services:
       networks:
          - webhashcat
 
-   node-cpu:
+   node-intel-cpu:
       profiles:
-         - cpu
-      container_name: hashcatnode-cpu
+         - intel-cpu
+      container_name: hashcatnode-intel-cpu
       build:
          context: .
          args:
-            HASHCAT_BASE: dizcza/docker-hashcat:latest
+            HASHCAT_BASE: dizcza/docker-hashcat:intel-cpu
             HASHCAT_BINARY: /usr/local/bin/hashcat
             HASHCAT_VERSION: ${HASHCAT_VERSION:-v7.1.2}
       ports:
          - "9999:9999"
       environment:
-         - HASHCATNODE_USERNAME=${HASHCATNODE_USERNAME:-test}
-         - HASHCATNODE_HASH=${HASHCATNODE_HASH:-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08}
+         - HASHCATNODE_DEVICE_TYPE=1
+         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
+         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
+         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
+         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
       restart: unless-stopped
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+         - ./secrets:/run/secrets:ro
       networks:
-         - webhashcat
+         webhashcat:
+            aliases:
+               - hashcatnode-cpu
+
+   node-pocl:
+      profiles:
+         - pocl
+      container_name: hashcatnode-pocl
+      build:
+         context: .
+         args:
+            HASHCAT_BASE: dizcza/docker-hashcat:pocl
+            HASHCAT_BINARY: /usr/local/bin/hashcat
+            HASHCAT_VERSION: ${HASHCAT_VERSION:-v7.1.2}
+      ports:
+         - "9999:9999"
+      environment:
+         - HASHCATNODE_DEVICE_TYPE=1
+         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
+         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
+         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
+         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
+      restart: unless-stopped
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+         - ./secrets:/run/secrets:ro
+      networks:
+         webhashcat:
+            aliases:
+               - hashcatnode-cpu-pocl
 
 networks:
    webhashcat:
       external: true
       name: webhashcat-net
+
+volumes:
+   hashcatnode-db:

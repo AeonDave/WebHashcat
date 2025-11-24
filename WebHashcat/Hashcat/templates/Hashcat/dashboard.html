@@ -53,6 +53,7 @@
                         <tbody>
                         </tbody>
                      </table>
+                     <p id="dashboard_node_cache_hint" class="text-muted small cache-hint" style="margin-top: 10px;"></p>
                   </div>
                </div>
             </div>
@@ -83,6 +84,7 @@
                   </tr>
                   </thead>
                </table>
+               <p id="running_cache_hint" class="text-muted small cache-hint" style="margin-top: 10px;"></p>
             </div>
          </div>
 
@@ -107,6 +109,7 @@
                   </tr>
                   </thead>
                </table>
+               <p id="error_cache_hint" class="text-muted small cache-hint" style="margin-top: 10px;"></p>
             </div>
          </div>
 
@@ -251,6 +254,10 @@
                   "url": "{% url 'API:api_node_status' %}",
                },
             });
+
+            table.on('xhr.dt', function (e, settings, json) {
+               updateCacheHint('#dashboard_node_cache_hint', json && json.cache ? json.cache : null, 'Node snapshot');
+            });
  
             function autoRefresh()
             {
@@ -288,6 +295,10 @@
                   "url": "{% url 'API:api_running_sessions' %}",
                },
             });
+
+            table.on('xhr.dt', function (e, settings, json) {
+               updateCacheHint('#running_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
+            });
  
             function autoRefresh()
             {
@@ -323,6 +334,10 @@
                "ajax": {
                   "url": "{% url 'API:api_error_sessions' %}",
                },
+            });
+
+            table.on('xhr.dt', function (e, settings, json) {
+               updateCacheHint('#error_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
             });
  
             function autoRefresh()

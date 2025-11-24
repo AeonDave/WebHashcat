@@ -1,7 +1,6 @@
-from django.db import models
-from django.contrib.auth.models import User
-
 from Nodes.models import Node
+from django.contrib.auth.models import User
+from django.db import models
 
 
 # Create your models here.
@@ -15,19 +14,21 @@ class Hashfile(models.Model):
     cracked_count = models.IntegerField(default=0)
     username_included = models.BooleanField()
 
+
 class Session(models.Model):
     name = models.CharField(max_length=100)
     hashfile = models.ForeignKey(Hashfile, on_delete=models.CASCADE)
     node = models.ForeignKey(Node, on_delete=models.CASCADE)
     potfile_line_retrieved = models.IntegerField()
 
+
 class Hash(models.Model):
     hashfile = models.ForeignKey(Hashfile, on_delete=models.CASCADE)
     hash_type = models.IntegerField()
     username = models.CharField(max_length=190, null=True)
     password = models.CharField(max_length=190, null=True)
-    hash = models.TextField(max_length=4096, null=True) # Changed from char to text
-    hash_hash = models.CharField(max_length=190, null=True) # sha1 of the hash for joins
+    hash = models.TextField(max_length=4096, null=True)  # Changed from char to text
+    hash_hash = models.CharField(max_length=190, null=True)  # sha1 of the hash for joins
     password_len = models.IntegerField(null=True)
     password_charset = models.CharField(max_length=100, null=True)
     password_mask = models.CharField(null=True, max_length=190)
@@ -38,6 +39,7 @@ class Hash(models.Model):
             models.Index(fields=['hashfile', 'hash_hash'], name="hashfileid_hash_index"),
             models.Index(fields=['hash_hash', 'hash_type'], name="hash_index"),
         ]
+
 
 class Search(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE)  # Link to user

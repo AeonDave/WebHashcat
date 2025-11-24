@@ -1,39 +1,74 @@
-import socket
-import requests
-from requests_toolbelt.multipart import encoder
-import http.client
-import ssl
-import threading
-#from urllib.request import Request, urlopen
-import struct
-import json
 import base64
+import json
 import os
+from typing import Optional, Tuple, Union
+
+import requests
+import urllib3
 from django.db import transaction
+from requests_toolbelt.multipart import encoder
+
 from Utils.models import Lock
 
-timeout_connection = 1
-timeout_read = 60*10
-TIMEOUT = (timeout_connection, timeout_read)
+timeout_connection = float(os.environ.get("HASHCAT_API_CONNECT_TIMEOUT", 1))
+timeout_read = float(os.environ.get("HASHCAT_API_READ_TIMEOUT", 60 * 10))
+TIMEOUT: Tuple[float, float] = (timeout_connection, timeout_read)
+TRUST_BUNDLE_ENV = "HASHCAT_TRUST_BUNDLE"
+
+
+class HashcatAPIError(Exception):
+    """Base exception for HashcatAPI failures."""
+
+
+class HashcatAPINetworkError(HashcatAPIError):
+    """Raised when the node cannot be reached or TLS setup fails."""
+
+
+class HashcatAPIAuthError(HashcatAPIError):
+    """Raised when the node rejects provided credentials."""
+
+
+class HashcatAPIResponseError(HashcatAPIError):
+    """Raised when the node returns an unexpected payload."""
+
+    def __init__(self, message: str, *, status_code: Optional[int] = None, body: Optional[str] = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
 
 class HashcatAPI(object):
 
-    def __init__(self, ip, port, username, password):
+    def __init__(
+            self,
+            ip,
+            port,
+            username,
+            password,
+            *,
+            verify: Optional[Union[str, bool]] = None,
+            timeout: Optional[Tuple[float, float]] = None,
+    ):
         self.ip = ip
         self.port = port
         self.key = base64.b64encode(("%s:%s" % (username, password)).encode("ascii")).decode("ascii")
+        trust_bundle = os.environ.get(TRUST_BUNDLE_ENV)
+        if verify is None:
+            verify = trust_bundle if trust_bundle else False
+        self.verify = verify
+        self.timeout = timeout or TIMEOUT
+        if self.verify is False:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def get_hashcat_info(self):
         return self.send("/hashcatInfo")
 
-    def create_dictionary_session(self, session_name, hashfile, rule, wordlist, device_type, brain_mode, end_timestamp, hashcat_debug_file):
+    def create_dictionary_session(self, session_name, hashfile, rule, wordlist, device_type, brain_mode, end_timestamp,
+                                  hashcat_debug_file):
         hashfile_path = os.path.join(os.path.dirname(__file__), "..", "Files", "Hashfiles", hashfile.hashfile)
 
-        from Utils.hashcat import Hashcat
-        from Hashcat.models import Hashfile
-
         with transaction.atomic():
-            # Prevent hashfile from being modified while read 
+
             hashfile_lock = Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[0]
 
             payload = {
@@ -55,17 +90,15 @@ class HashcatAPI(object):
 
         return res
 
-    def create_mask_session(self, session_name, hashfile, mask, device_type, brain_mode, end_timestamp, hashcat_debug_file):
+    def create_mask_session(self, session_name, hashfile, mask, device_type, brain_mode, end_timestamp,
+                            hashcat_debug_file):
         hashfile_path = os.path.join(os.path.dirname(__file__), "..", "Files", "Hashfiles", hashfile.hashfile)
-
-        from Utils.hashcat import Hashcat
-        from Hashcat.models import Hashfile
 
         # lock
         with transaction.atomic():
             # Prevent hashfile from being modified while read 
-            hashfile_lock = Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[0]
-
+            hashfile_lock = Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[
+                0]
 
             payload = {
                 "name": session_name,
@@ -84,7 +117,6 @@ class HashcatAPI(object):
             del hashfile_lock
 
         return res
-
 
     def action(self, session_name, action):
         payload = {
@@ -136,59 +168,62 @@ class HashcatAPI(object):
 
         return self.send("/uploadWordlist", data=payload)
 
-    def send(self, url, data=None):
-        headers = {
+    def _build_url(self, path: str) -> str:
+        return "https://%s:%d%s" % (self.ip, self.port, path)
+
+    def _headers(self):
+        return {
             "Content-Type": "text/plain; charset=utf-8",
             "Accept-Encoding": "text/plain",
             "Authorization": "Basic %s" % self.key,
         }
 
-        """
-        gcontext = ssl.SSLContext(ssl.PROTOCOL_TLSv1)  # disable certif validation
-        conn = http.client.HTTPSConnection(self.ip, self.port, context=gcontext, verify=False)
-
-        if data == None:
-            conn.request("GET", url, headers=headers)
-        else:
-            conn.request("POST", url, "%s\r\n\r\n" % json.dumps(data), headers)
-
-        res = conn.getresponse()
-        """
-
+    def _perform_request(self, method: str, path: str, **kwargs) -> requests.Response:
+        url = self._build_url(path)
+        kwargs.setdefault("timeout", self.timeout)
+        kwargs.setdefault("verify", self.verify)
         try:
-            url = "https://%s:%d%s" % (self.ip, self.port, url)
-            if data == None:
-                res = requests.get(url, headers=headers, verify=False, timeout=TIMEOUT)
-            else:
-                res = requests.post(url, json.dumps(data), headers=headers, verify=False, timeout=TIMEOUT)
+            response = requests.request(method, url, **kwargs)
+        except requests.exceptions.SSLError as exc:
+            raise HashcatAPINetworkError(f"TLS handshake failed for {url}: {exc}") from exc
+        except requests.exceptions.RequestException as exc:
+            raise HashcatAPINetworkError(f"Unable to reach {url}: {exc}") from exc
 
-            #data = res.read()
-            data = res.text
+        if response.status_code == 401:
+            raise HashcatAPIAuthError("Node rejected supplied credentials")
+        if response.status_code == 403:
+            raise HashcatAPIAuthError("Access to node denied (HTTP 403)")
+        if not response.ok:
+            raise HashcatAPIResponseError(
+                f"Node returned unexpected status {response.status_code}",
+                status_code=response.status_code,
+                body=response.text,
+            )
 
-            #conn.close()
-            return json.loads(data)
-        except requests.exceptions.ConnectionError:
-            return None
+        return response
+
+    def _parse_json(self, response: requests.Response):
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise HashcatAPIResponseError("Invalid JSON payload from node", body=response.text) from exc
+
+    def send(self, url, data=None):
+        headers = self._headers()
+        if data is None:
+            response = self._perform_request("GET", url, headers=headers)
+        else:
+            response = self._perform_request("POST", url, headers=headers, data=json.dumps(data))
+        return self._parse_json(response)
 
     def post_file(self, url, data, filepath):
-        headers = {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Accept-Encoding": "text/plain",
-            "Authorization": "Basic %s" % self.key,
-        }
+        headers = self._headers()
+        with open(filepath, 'rb') as file_handle:
+            form = encoder.MultipartEncoder({
+                'json': (None, json.dumps(data), 'application/json'),
+                'file': ("file", file_handle, 'application/octet-stream')
+            })
 
-        url = "https://%s:%d%s" % (self.ip, self.port, url)
-
-        form = encoder.MultipartEncoder({
-            'json': (None, json.dumps(data), 'application/json'),
-            'file': ("file", open(filepath, 'rb'), 'application/octet-stream')
-        })
-
-        headers['Content-Type'] = form.content_type
-
-        res = requests.post(url, data=form, headers=headers, verify=False)
-
-        data = res.text
-
-        return json.loads(data)
-
+            headers['Content-Type'] = form.content_type
+            response = self._perform_request("POST", url, headers=headers, data=form)
+        return self._parse_json(response)

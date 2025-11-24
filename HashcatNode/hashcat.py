@@ -6,11 +6,13 @@ import logging
 import os
 import random
 import re
+import shlex
 import string
 import subprocess
 import tempfile
 import threading
 import time
+
 try:
     from datetime import UTC, datetime
 except ImportError:  # pragma: no cover - Python <3.11 lacks datetime.UTC
@@ -19,7 +21,7 @@ except ImportError:  # pragma: no cover - Python <3.11 lacks datetime.UTC
     UTC = _timezone.utc
 from os import listdir
 from os.path import isfile, join
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if os.name == 'nt':
     try:  # pragma: no cover - Windows only dependency
@@ -40,7 +42,22 @@ from peewee import (
     TextField,
 )
 
-database = SqliteDatabase(os.path.dirname(os.path.abspath(__file__)) + os.sep + "hashcatnode.db")
+DB_PATH = os.environ.get("HASHCATNODE_DB_PATH", os.path.dirname(os.path.abspath(__file__)) + os.sep + "hashcatnode.db")
+database = SqliteDatabase(DB_PATH)
+LOGGER = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+
+class HashcatExecutionError(RuntimeError):
+    """Raised when a hashcat subprocess fails."""
+
+    def __init__(self, cmd: List[str], returncode: int, stdout: Optional[str], stderr: Optional[str]):
+        super().__init__(f"Hashcat command failed with exit code {returncode}: {shlex.join(cmd)}")
+        self.cmd = cmd
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 class Hashcat(object):
@@ -56,6 +73,7 @@ class Hashcat(object):
     sessions: Dict[str, "Session"] = {}
     workload_profile: int = 3  # default hashcat value
     brain: Dict[str, str] = {"enabled": "false", "host": "", "port": "", "password": ""}
+    default_device_type: int = 1
 
     if TYPE_CHECKING:
         commandline_path: str
@@ -75,6 +93,92 @@ class Hashcat(object):
         wordlists: Dict[str, Dict[str, str]]
         sessions: Dict[str, "Session"]
 
+    @classmethod
+    def _load_assets(cls, directory: str, extension: str) -> Dict[str, Dict[str, str]]:
+        assets: Dict[str, Dict[str, str]] = {}
+        file_list = [join(directory, f) for f in listdir(directory) if isfile(join(directory, f)) and f != ".gitkeep"]
+
+        for file in file_list:
+            if extension and not file.endswith(extension):
+                continue
+            assets[os.path.basename(file)] = {
+                "name": os.path.basename(file),
+                "md5": cls._md5_for_file(file),
+                "path": file,
+            }
+        return assets
+
+    @staticmethod
+    def run_hashcat(
+            cmd: List[str],
+            *,
+            check: bool = True,
+            capture_output: bool = True,
+            text: bool = True,
+            env: Optional[Dict[str, str]] = None,
+            cwd: Optional[str] = None,
+            input_data: Optional[Union[str, bytes]] = None,
+            timeout: Optional[float] = None,
+            stdout: Optional[int] = None,
+            stderr: Optional[int] = None,
+    ) -> subprocess.CompletedProcess:
+        if not cmd:
+            raise ValueError("Command list must not be empty")
+
+        exec_cwd = cwd or (os.path.dirname(Hashcat.binary) if Hashcat.binary else None)
+        log_cmd = shlex.join(cmd)
+        LOGGER.debug("Executing hashcat command: %s", log_cmd)
+
+        run_kwargs: Dict[str, Any] = {
+            "check": False,
+            "text": text,
+            "cwd": exec_cwd,
+            "env": env,
+            "input": input_data,
+            "timeout": timeout,
+        }
+        if capture_output:
+            run_kwargs["capture_output"] = True
+        else:
+            if stdout is not None:
+                run_kwargs["stdout"] = stdout
+            if stderr is not None:
+                run_kwargs["stderr"] = stderr
+
+        try:
+            completed = subprocess.run(cmd, **run_kwargs)
+        except OSError as exc:
+            LOGGER.exception("Failed to invoke hashcat command: %s", log_cmd)
+            raise HashcatExecutionError(cmd, -1, None, str(exc)) from exc
+
+        if check and completed.returncode != 0:
+            LOGGER.error(
+                "Hashcat command failed (%s): rc=%s stderr=%s",
+                log_cmd,
+                completed.returncode,
+                (completed.stderr or "").strip(),
+            )
+            raise HashcatExecutionError(cmd, completed.returncode, completed.stdout, completed.stderr)
+
+        return completed
+
+    @staticmethod
+    def _md5_for_file(path: str) -> str:
+        if os.name != 'nt':
+            try:
+                result = Hashcat.run_hashcat(["md5sum", path])
+                stdout = (result.stdout or "").strip()
+                if stdout:
+                    return stdout.split()[0]
+            except HashcatExecutionError:
+                LOGGER.warning("md5sum failed for %s, falling back to hashlib", path)
+
+        file_hash = hashlib.md5()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(8192), b""):
+                file_hash.update(chunk)
+        return file_hash.hexdigest()
+
     """
         Parse hashcat version
     """
@@ -83,9 +187,8 @@ class Hashcat(object):
     def parse_version(self):
 
         # cwd needs to be added for Windows version of hashcat
-        hashcat_version = subprocess.Popen([self.binary, '-V'], stdout=subprocess.PIPE,
-                                           cwd=os.path.dirname(self.binary))
-        self.version = hashcat_version.communicate()[0].decode()
+        result = self.run_hashcat([self.binary, '-V'])
+        self.version = (result.stdout or "").strip()
 
     """
         Parse hashcat help
@@ -100,9 +203,9 @@ class Hashcat(object):
 
         def parse_from_args(args):
             help_section = None
-            hashcat_help = subprocess.Popen(args, stdout=subprocess.PIPE, cwd=os.path.dirname(self.binary))
-            for line in hashcat_help.stdout:
-                line = line.decode().rstrip()
+            hashcat_help = self.run_hashcat(args)
+            for line in (hashcat_help.stdout or "").splitlines():
+                line = line.rstrip()
 
                 if not line:
                     continue
@@ -137,42 +240,9 @@ class Hashcat(object):
 
     @classmethod
     def parse_rules(self):
-        self.rules = {}
-
-        file_list = [join(self.rules_dir, f) for f in listdir(self.rules_dir) if
-                     isfile(join(self.rules_dir, f)) and f != ".gitkeep"]
-
-        for file in file_list:
-            with open(file, "rb") as f:
-                file_hash = hashlib.md5()
-                while True:
-                    chunk = f.read(8192)
-                    if not chunk:
-                        break
-                    file_hash.update(chunk)
-
-                self.rules[os.path.basename(file)] = {
-                    "name": os.path.basename(file),
-                    "md5": file_hash.hexdigest(),
-                    "path": file,
-                }
+        self.rules = self._load_assets(self.rules_dir, ".rule")
 
         # Not comptatible with windows, lets make a pure python version
-        """
-        path = os.path.join(self.rules_dir, "*")
-
-        # use md5sum instead of python code for performance issues on a big file
-        result = subprocess.run('md5sum %s' % path, shell=True, stdout=subprocess.PIPE).stdout.decode()
-
-        for line in result.split("\n"):
-            items = line.split()
-            if len(items) == 2:
-                self.rules[items[1].split("/")[-1]] = {
-                        "name": items[1].split("/")[-1],
-                        "md5": items[0],
-                        "path": items[1],
-                    }
-        """
 
     """
         Parse wordlist directory
@@ -180,42 +250,9 @@ class Hashcat(object):
 
     @classmethod
     def parse_wordlists(self):
-        self.wordlists = {}
-
-        file_list = [join(self.wordlist_dir, f) for f in listdir(self.wordlist_dir) if
-                     isfile(join(self.wordlist_dir, f)) and f != ".gitkeep"]
-
-        for file in file_list:
-            with open(file, "rb") as f:
-                file_hash = hashlib.md5()
-                while True:
-                    chunk = f.read(8192)
-                    if not chunk:
-                        break
-                    file_hash.update(chunk)
-
-                self.wordlists[os.path.basename(file)] = {
-                    "name": os.path.basename(file),
-                    "md5": file_hash.hexdigest(),
-                    "path": file,
-                }
+        self.wordlists = self._load_assets(self.wordlist_dir, "")
 
         # Not comptatible with windows, lets make a pure python version
-        """
-        path = os.path.join(self.wordlist_dir, "*")
-
-        # use md5sum instead of python code for performance issues on a big file
-        result = subprocess.run('md5sum %s' % path, shell=True, stdout=subprocess.PIPE).stdout.decode()
-
-        for line in result.split("\n"):
-            items = line.split()
-            if len(items) == 2:
-                self.wordlists[items[1].split("/")[-1]] = {
-                        "name": items[1].split("/")[-1],
-                        "md5": items[0],
-                        "path": items[1],
-                    }
-        """
 
     """
         Parse mask directory
@@ -223,42 +260,9 @@ class Hashcat(object):
 
     @classmethod
     def parse_masks(self):
-        self.masks = {}
-
-        file_list = [join(self.mask_dir, f) for f in listdir(self.mask_dir) if
-                     isfile(join(self.mask_dir, f)) and f != ".gitkeep"]
-
-        for file in file_list:
-            with open(file, "rb") as f:
-                file_hash = hashlib.md5()
-                while True:
-                    chunk = f.read(8192)
-                    if not chunk:
-                        break
-                    file_hash.update(chunk)
-
-                self.masks[os.path.basename(file)] = {
-                    "name": os.path.basename(file),
-                    "md5": file_hash.hexdigest(),
-                    "path": file,
-                }
+        self.masks = self._load_assets(self.mask_dir, ".hcmask")
 
         # Not comptatible with windows, lets make a pure python version
-        """
-        path = os.path.join(self.mask_dir, "*")
-
-        # use md5sum instead of python code for performance issues on a big file
-        result = subprocess.run('md5sum %s' % path, shell=True, stdout=subprocess.PIPE).stdout.decode()
-
-        for line in result.split("\n"):
-            items = line.split()
-            if len(items) == 2:
-                self.masks[items[1].split("/")[-1]] = {
-                        "name": items[1].split("/")[-1],
-                        "md5": items[0],
-                        "path": items[1],
-                    }
-        """
 
     """
         Create a new session
@@ -271,13 +275,15 @@ class Hashcat(object):
         if name in self.sessions:
             raise Exception("This session name has already been used")
 
-        if not hash_mode_id in self.hash_modes:
+        if hash_mode_id != -2 and hash_mode_id not in self.hash_modes:
             raise Exception("Inexistant hash mode, did you upgraded hashcat ?")
 
         if not crack_type in ["dictionary", "mask"]:
             raise Exception("Unsupported cracking type: %s" % crack_type)
 
-        if not device_type in [1, 2, 3]:
+        # Always rely on the node's configured/auto-detected device type to avoid user supplied mismatch.
+        device_type = self.default_device_type
+        if device_type not in [1, 2, 3]:
             raise Exception("Unsupported device type: %d" % device_type)
 
         if not brain_mode in [0, 1, 2, 3]:
@@ -442,7 +448,7 @@ class Hashcat(object):
 
         name = name.split("/")[-1]
 
-        if not name.endswith(".wordlist"):
+        if not name.endswith((".wordlist", ".gz", ".zip")):
             name += ".wordlist"
 
         path = os.path.join(self.wordlist_dir, name)
@@ -570,15 +576,17 @@ class Session(Model):
         if not self.session_status in ["Aborted"]:
             # Command lines used to crack the passwords
             if self.crack_type == "dictionary":
-                if self.rule_file != None:
-                    cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0', '-m',
-                                str(self.hash_mode_id), self.hash_file, self.wordlist_file, '-r', self.rule_file]
-                else:
-                    cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0', '-m',
-                                str(self.hash_mode_id), self.hash_file, self.wordlist_file]
+                cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0']
+                if self.hash_mode_id != -2:
+                    cmd_line += ['-m', str(self.hash_mode_id)]
+                cmd_line += [str(self.hash_file), str(self.wordlist_file)]
+                if self.rule_file is not None:
+                    cmd_line += ['-r', str(self.rule_file)]
             elif self.crack_type == "mask":
-                cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '3', '-m', str(self.hash_mode_id),
-                            self.hash_file, self.mask_file]
+                cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '3']
+                if self.hash_mode_id != -2:
+                    cmd_line += ['-m', str(self.hash_mode_id)]
+                cmd_line += [str(self.hash_file), str(self.mask_file)]
             else:
                 raise ValueError(f"Unsupported crack type: {self.crack_type}")
             if self.username_included:
@@ -600,10 +608,12 @@ class Session(Model):
             cmd_line += ['--brain-port', Hashcat.brain['port']]
             cmd_line += ['--brain-password', Hashcat.brain['password']]
 
-        print("Session:%s, startup command:%s" % (self.name, " ".join(cmd_line)))
-        logging.debug("Session:%s, startup command:%s" % (self.name, " ".join(cmd_line)))
+        cmd_line = [str(item) for item in cmd_line]
+        flattened_cmd = " ".join(cmd_line)
+        LOGGER.info("Session %s startup command: %s", self.name, flattened_cmd)
+        LOGGER.debug("Session %s startup command: %s", self.name, flattened_cmd)
         with open(self.hashcat_output_file, "a") as f:
-            f.write("Command: %s\n" % " ".join(cmd_line))
+            f.write("Command: %s\n" % " ".join(map(str, cmd_line)))
 
         self.session_status = "Running"
         self.time_started = datetime.now(UTC)
@@ -626,12 +636,30 @@ class Session(Model):
             self.win_stdin = console.GetStdHandle(console.STD_INPUT_HANDLE)
 
         # cwd needs to be added for Windows version of hashcat
-        if os.name == 'nt':
-            self.session_process = subprocess.Popen(cmd_line, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                                    cwd=os.path.dirname(Hashcat.binary))
-        else:
-            self.session_process = subprocess.Popen(cmd_line, stdout=subprocess.PIPE, stdin=subprocess.PIPE,
-                                                    stderr=subprocess.PIPE, cwd=os.path.dirname(Hashcat.binary))
+        popen_kwargs = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "cwd": os.path.dirname(Hashcat.binary),
+        }
+        if os.name != 'nt':
+            popen_kwargs["stdin"] = subprocess.PIPE
+
+        if not os.path.exists(Hashcat.binary):
+            raise FileNotFoundError(f"Hashcat binary not found: {Hashcat.binary}")
+
+        if not os.path.exists(self.hash_file):
+            raise FileNotFoundError(f"Hash file not found: {self.hash_file}")
+
+        if self.wordlist_file and not os.path.exists(self.wordlist_file):
+            raise FileNotFoundError(f"Wordlist not found: {self.wordlist_file}")
+
+        LOGGER.info("Starting hashcat with command: %s", " ".join(cmd_line))
+
+        try:
+            self.session_process = subprocess.Popen(cmd_line, **popen_kwargs)
+        except OSError as exc:
+            LOGGER.exception("Unable to launch hashcat process for session %s", self.name)
+            raise HashcatExecutionError(cmd_line, -1, None, str(exc)) from exc
 
         self.update_session()
 
@@ -667,27 +695,20 @@ class Session(Model):
                     break
 
         return_code = self.session_process.wait()
-        # The cracking ended, set the parameters accordingly
-        if return_code in [255, 254]:
-            self.session_status = "Error"
-            if return_code == 254:
-                self.reason = "GPU-watchdog alarm"
-            else:
-                ansi_escape = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
-                error_msg = self.session_process.stderr.read().decode()
-                error_msg = ansi_escape.sub('', error_msg).strip()
-                self.reason = error_msg
-        elif return_code in [2, 3, 4]:
-            self.session_status = "Aborted"
-            self.reason = ""
-        else:
-            self.session_status = "Done"
-            self.reason = ""
-        self.time_estimated = "N/A"
-        self.speed = "N/A"
-        self.save()
+        stderr_output = ""
+        if self.session_process.stderr:
+            try:
+                stderr_output = self.session_process.stderr.read().decode(errors="ignore")
+            except Exception:  # pragma: no cover - defensive path
+                stderr_output = ""
+        self._finalize_process_result(return_code, stderr_output)
 
     def details(self):
+        def _serialize_dt(value):
+            if not value:
+                return None
+            return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
         return {
             "name": self.name,
             "crack_type": self.crack_type,
@@ -696,7 +717,7 @@ class Session(Model):
             "mask": os.path.basename(self.mask_file)[:-7] if self.mask_file else None,
             "wordlist": os.path.basename(self.wordlist_file)[:-1 * len(".wordlist")] if self.wordlist_file else None,
             "status": self.session_status,
-            "time_started": self.time_started.isoformat() if self.time_started else None,
+            "time_started": _serialize_dt(self.time_started),
             "time_estimated": self.time_estimated,
             "speed": self.speed,
             "progress": self.progress,
@@ -773,6 +794,28 @@ class Session(Model):
             os.remove(self.hash_file)
         except:
             pass
+
+    def _strip_ansi(self, value: Optional[str]) -> str:
+        return ANSI_ESCAPE_RE.sub('', value or '').strip()
+
+    def _finalize_process_result(self, return_code: int, stderr_output: str) -> None:
+        if return_code in [255, 254]:
+            self.session_status = "Error"
+            if return_code == 254:
+                reason = "GPU-watchdog alarm"
+            else:
+                reason = self._strip_ansi(stderr_output) or "Hashcat exited with code 255"
+        elif return_code in [2, 3, 4]:
+            self.session_status = "Aborted"
+            reason = ""
+        else:
+            self.session_status = "Done"
+            reason = ""
+
+        self.reason = reason
+        self.time_estimated = "N/A"
+        self.speed = "N/A"
+        self.save()
         try:
             os.remove(self.hashcat_output_file)
         except:
@@ -791,11 +834,16 @@ class Session(Model):
         else:
             cmd_line += ["--outfile-format", "3"]
         cmd_line += ["--potfile-path", self.pot_file]
-        # cwd needs to be added for Windows version of hashcat
-        p = subprocess.Popen(cmd_line, cwd=os.path.dirname(Hashcat.binary))
-        p.wait()
+        Hashcat.run_hashcat(
+            cmd_line,
+            capture_output=False,
+            text=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
 
-        return open(self.result_file).read()
+        with open(self.result_file, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read()
 
     """
         Update the session
@@ -900,9 +948,9 @@ class Session(Model):
             except BrokenPipeError:
                 pass
 
-        print("Waiting for thread to end....")
+        LOGGER.info("Waiting for session %s thread to finish", self.name)
         self.thread.join()
-        print("Done")
+        LOGGER.info("Session %s thread finished", self.name)
 
         self.session_status = "Aborted"
         self.save()

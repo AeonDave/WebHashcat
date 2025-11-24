@@ -1,14 +1,10 @@
-import os
-import base64
-from django.shortcuts import render
+from django.contrib.auth import authenticate, login
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.template import loader
-from django.http import HttpResponse
-from django.contrib.auth import authenticate, login
 
 
 def auth(request):
-
     context = {
         "Section": "Auth",
     }
@@ -27,4 +23,3 @@ def auth(request):
 
     template = loader.get_template('Auth/auth.html')
     return HttpResponse(template.render(context, request))
-

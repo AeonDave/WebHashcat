@@ -1,6 +1,6 @@
+from Hashcat.models import Hashfile
 from django.db import models
 
-from Hashcat.models import Hashfile
 
 # Create your models here.
 
@@ -12,6 +12,7 @@ from Hashcat.models import Hashfile
 class Lock(models.Model):
     hashfile = models.ForeignKey(Hashfile, on_delete=models.CASCADE)
     lock_ressource = models.CharField(max_length=30)
+
 
 class Task(models.Model):
     time = models.DateTimeField()

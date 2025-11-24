@@ -1,45 +1,43 @@
-import json
 import csv
+import json
+import os.path
 import random
 import string
-import os.path
-import tempfile
-import humanize
-import time
-import requests
 from datetime import datetime
-from collections import OrderedDict
-
-from django.shortcuts import render
-from django.shortcuts import redirect
-from django.template import loader
-from django.urls import reverse
-from django.http import HttpResponse
-from django.http import StreamingHttpResponse
-from django.http import FileResponse
-from django.http import Http404
-from django.contrib.auth.decorators import login_required
-from django.middleware.csrf import get_token
-from django.db.models import Q, Count, BinaryField
-from django.db.models.functions import Cast
-from django.db import connection
-from django.contrib import messages
-from django.db.utils import OperationalError
-from django.contrib.admin.views.decorators import staff_member_required
-
-from django.shortcuts import get_object_or_404
-
 from operator import itemgetter
 
+import humanize
 from Nodes.models import Node
+from Utils.hashcat import Hashcat
+from Utils.hashcatAPI import HashcatAPI, HashcatAPIError
+from Utils.tasks import import_hashfile_task, run_search_task
+from Utils.utils import Echo
+from Utils.utils import init_hashfile_locks
+from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.decorators import login_required
+from django.http import FileResponse
+from django.http import Http404
+from django.http import HttpResponse
+from django.http import StreamingHttpResponse
+from django.shortcuts import get_object_or_404
+from django.shortcuts import redirect
+from django.template import loader
+
 from .models import Hashfile, Session, Hash, Search
 
-from Utils.hashcatAPI import HashcatAPI
-from Utils.hashcat import Hashcat
-from Utils.utils import init_hashfile_locks
-from Utils.utils import Echo
-from Utils.tasks import import_hashfile_task, run_search_task
-# Create your views here.
+
+def _available_hash_types():
+    for node in Node.objects.all():
+        try:
+            api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+            info = api.get_hashcat_info()
+            if info and info.get("response") == "ok" and info.get("hash_types"):
+                return sorted(info["hash_types"], key=itemgetter("name"))
+        except HashcatAPIError:
+            continue
+    return sorted(list(Hashcat.get_hash_types().values()), key=itemgetter('name'))
+
 
 @login_required
 def dashboard(request):
@@ -49,6 +47,7 @@ def dashboard(request):
     template = loader.get_template('Hashcat/dashboard.html')
     return HttpResponse(template.render(context, request))
 
+
 @login_required
 def hashfiles(request):
     context = {}
@@ -56,9 +55,10 @@ def hashfiles(request):
 
     if request.method == 'POST':
         if request.POST["action"] == "add":
-            hash_type=int(request.POST["hash_type"])
+            hash_type = int(request.POST["hash_type"])
 
-            hashfile_name = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".hashfile"
+            hashfile_name = ''.join(
+                random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".hashfile"
             hashfile_path = os.path.join(os.path.dirname(__file__), "..", "Files", "Hashfiles", hashfile_name)
 
             hashes = request.POST["hashes"]
@@ -78,7 +78,7 @@ def hashfiles(request):
                 hashfile=hashfile_name,
                 hash_type=hash_type,
                 line_count=0,
-                cracked_count = 0,
+                cracked_count=0,
                 username_included=username_included,
             )
             hashfile.save()
@@ -87,19 +87,31 @@ def hashfiles(request):
             # Update the new file with the potfile, this may take a while, but it is processed in a background task
             import_hashfile_task.delay(hashfile.id)
 
-            if hash_type != -1: # if != plaintext
+            if hash_type != -1:  # if != plaintext
                 messages.success(request, "Hashfile successfully added")
             else:
                 messages.success(request, "Plaintext file successfully added")
 
     context["node_list"] = Node.objects.all()
-    context["hash_type_list"] = [{'id': -1, 'name': 'Plaintext'}] + sorted(list(Hashcat.get_hash_types().values()), key=itemgetter('name'))
+    hash_types = _available_hash_types()
+    # Autodetect in hashcat still requires choosing among suggested modes; we require explicit selection to avoid ambiguity.
+    context["hash_type_list"] = [{'id': -1, 'name': 'Plaintext'}] + hash_types
     context["rule_list"] = [{'name': None}] + sorted(Hashcat.get_rules(detailed=False), key=itemgetter('name'))
     context["mask_list"] = sorted(Hashcat.get_masks(detailed=False), key=itemgetter('name'))
     context["wordlist_list"] = sorted(Hashcat.get_wordlists(detailed=False), key=itemgetter('name'))
+    node_devices = {}
+    for node in context["node_list"]:
+        try:
+            api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+            info = api.get_hashcat_info()
+            node_devices[node.name] = info.get("device_type") if info else None
+        except HashcatAPIError:
+            node_devices[node.name] = None
+    context["node_device_map_json"] = json.dumps(node_devices)
 
     template = loader.get_template('Hashcat/hashes.html')
     return HttpResponse(template.render(context, request))
+
 
 @login_required
 def search(request):
@@ -149,6 +161,7 @@ def search(request):
     template = loader.get_template('Hashcat/search.html')
     return HttpResponse(template.render(context, request))
 
+
 @login_required
 @staff_member_required
 def files(request):
@@ -164,17 +177,19 @@ def files(request):
             elif request.POST["filetype"] == "wordlist":
                 Hashcat.remove_wordlist(request.POST["filename"])
 
-    context["rule_list"] = Hashcat.get_rules()
-    context["mask_list"] = Hashcat.get_masks()
-    context["wordlist_list"] = Hashcat.get_wordlists()
+    # Use non-detailed listings to avoid expensive md5/line counting on large datasets
+    context["rule_list"] = Hashcat.get_rules(detailed=False)
+    context["mask_list"] = Hashcat.get_masks(detailed=False)
+    context["wordlist_list"] = Hashcat.get_wordlists(detailed=False)
 
     template = loader.get_template('Hashcat/files.html')
     return HttpResponse(template.render(context, request))
 
+
 @login_required
 def new_session(request):
     if request.method == 'POST':
-        #session_name = request.POST["name"]
+        # session_name = request.POST["name"]
 
         node_name = request.POST["node"]
         node = get_object_or_404(Node, name=node_name)
@@ -200,7 +215,8 @@ def new_session(request):
         else:
             end_timestamp = None
 
-        session_name = ("%s-%s" % (hashfile.name, ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12)))).replace(" ", "_")
+        session_name = ("%s-%s" % (hashfile.name, ''.join(
+            random.choice(string.ascii_uppercase + string.digits) for _ in range(12)))).replace(" ", "_")
 
         if "debug" in request.POST:
             hashcat_debug_file = True
@@ -210,11 +226,13 @@ def new_session(request):
         try:
             hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
             if crack_type == "dictionary":
-                res = hashcat_api.create_dictionary_session(session_name, hashfile, rule, wordlist, device_type, brain_mode, end_timestamp, hashcat_debug_file)
+                res = hashcat_api.create_dictionary_session(session_name, hashfile, rule, wordlist, device_type,
+                                                            brain_mode, end_timestamp, hashcat_debug_file)
             elif crack_type == "mask":
-                res = hashcat_api.create_mask_session(session_name, hashfile, mask, device_type, brain_mode, end_timestamp, hashcat_debug_file)
-        except requests.exceptions.ConnectionError: 
-            messages.error(request, "Node %s not accessible" % node_name)
+                res = hashcat_api.create_mask_session(session_name, hashfile, mask, device_type, brain_mode,
+                                                      end_timestamp, hashcat_debug_file)
+        except HashcatAPIError as exc:
+            messages.error(request, f"Node {node_name} not accessible: {exc}")
             return redirect('Hashcat:hashfiles')
 
         if res["response"] == "error":
@@ -224,14 +242,15 @@ def new_session(request):
         messages.success(request, "Session successfully created")
 
         session = Session(
-                name=session_name,
-                hashfile=hashfile,
-                node = node,
-                potfile_line_retrieved=0,
+            name=session_name,
+            hashfile=hashfile,
+            node=node,
+            potfile_line_retrieved=0,
         )
         session.save()
 
     return redirect('Hashcat:hashfiles')
+
 
 @login_required
 @staff_member_required
@@ -248,6 +267,7 @@ def upload_rule(request):
 
     return redirect('Hashcat:files')
 
+
 @login_required
 @staff_member_required
 def upload_mask(request):
@@ -261,8 +281,8 @@ def upload_mask(request):
 
             Hashcat.upload_mask(name, mask_file)
 
-
     return redirect('Hashcat:files')
+
 
 @login_required
 @staff_member_required
@@ -275,9 +295,19 @@ def upload_wordlist(request):
             f = request.FILES["file"]
             wordlist_file = f.read()
 
+            # If the user did not provide an explicit compressed extension, inherit it from the uploaded file
+            original_name = f.name
+            ext_candidates = [".tar.gz", ".gz", ".zip"]
+            if not any(name.endswith(ext) for ext in ext_candidates + [".wordlist"]):
+                for ext in ext_candidates:
+                    if original_name.endswith(ext):
+                        name = f"{name}{ext}"
+                        break
+
             Hashcat.upload_wordlist(name, wordlist_file)
 
     return redirect('Hashcat:files')
+
 
 @login_required
 def hashfile(request, hashfile_id, error_msg=''):
@@ -292,11 +322,14 @@ def hashfile(request, hashfile_id, error_msg=''):
 
     context['hashfile'] = hashfile
     context['lines'] = humanize.intcomma(hashfile.line_count)
-    context['recovered'] = "%s (%.2f%%)" % (humanize.intcomma(hashfile.cracked_count), hashfile.cracked_count/hashfile.line_count*100) if hashfile.line_count != 0 else "0"
-    context['hash_type'] = "Plaintext" if hashfile.hash_type == -1 else Hashcat.get_hash_types()[hashfile.hash_type]["name"]
+    context['recovered'] = "%s (%.2f%%)" % (humanize.intcomma(hashfile.cracked_count),
+                                            hashfile.cracked_count / hashfile.line_count * 100) if hashfile.line_count != 0 else "0"
+    context['hash_type'] = "Plaintext" if hashfile.hash_type == -1 else Hashcat.get_hash_types()[hashfile.hash_type][
+        "name"]
 
     template = loader.get_template('Hashcat/hashfile.html')
     return HttpResponse(template.render(context, request))
+
 
 @login_required
 def export_cracked(request, hashfile_id):
@@ -309,12 +342,15 @@ def export_cracked(request, hashfile_id):
     cracked_hashes = Hash.objects.filter(hashfile_id=hashfile.id, password__isnull=False)
 
     if hashfile.username_included:
-        response = StreamingHttpResponse(("%s:%s\n" % (item.username, item.password) for item in cracked_hashes), content_type="text/txt")
+        response = StreamingHttpResponse(("%s:%s\n" % (item.username, item.password) for item in cracked_hashes),
+                                         content_type="text/txt")
     else:
-        response = StreamingHttpResponse(("%s:%s\n" % (item.hash, item.password) for item in cracked_hashes), content_type="text/txt")
+        response = StreamingHttpResponse(("%s:%s\n" % (item.hash, item.password) for item in cracked_hashes),
+                                         content_type="text/txt")
 
     response['Content-Disposition'] = 'attachment; filename="cracked.txt"'
     return response
+
 
 @login_required
 def export_uncracked(request, hashfile_id):
@@ -324,17 +360,17 @@ def export_uncracked(request, hashfile_id):
     if request.user != hashfile.owner and not request.user.is_staff:
         raise Http404("You do not have permission to view this object")
 
-
-
     uncracked_hashes = Hash.objects.filter(hashfile_id=hashfile.id, password__isnull=True)
 
     if hashfile.username_included:
-        response = StreamingHttpResponse(("%s:%s\n" % (item.username, item.hash) for item in uncracked_hashes), content_type="text/txt")
+        response = StreamingHttpResponse(("%s:%s\n" % (item.username, item.hash) for item in uncracked_hashes),
+                                         content_type="text/txt")
     else:
         response = StreamingHttpResponse(("%s\n" % (item.hash,) for item in uncracked_hashes), content_type="text/txt")
 
     response['Content-Disposition'] = 'attachment; filename="uncracked.txt"'
     return response
+
 
 @login_required
 def csv_masks(request, hashfile_id):
@@ -345,15 +381,19 @@ def csv_masks(request, hashfile_id):
         raise Http404("You do not have permission to view this object")
 
     # didn't found the correct way in pure django...
-    rows = Hash.objects.raw("SELECT 1 AS id, MAX(password_mask) AS password_mask, COUNT(*) AS count FROM Hashcat_hash WHERE hashfile_id=%s AND password_mask IS NOT NULL GROUP BY password_mask ORDER BY count DESC", [hashfile.id])
+    rows = Hash.objects.raw(
+        "SELECT 1 AS id, MAX(password_mask) AS password_mask, COUNT(*) AS count FROM Hashcat_hash WHERE hashfile_id=%s AND password_mask IS NOT NULL GROUP BY password_mask ORDER BY count DESC",
+        [hashfile.id])
 
     pseudo_buffer = Echo()
     writer = csv.writer(pseudo_buffer)
 
-    response = StreamingHttpResponse((writer.writerow([item.password_mask, item.count]) for item in rows), content_type="text/csv")
+    response = StreamingHttpResponse((writer.writerow([item.password_mask, item.count]) for item in rows),
+                                     content_type="text/csv")
 
     response['Content-Disposition'] = 'attachment; filename="masks.csv"'
     return response
+
 
 @login_required
 def export_search(request, search_id):
@@ -367,5 +407,3 @@ def export_search(request, search_id):
 
     response['Content-Disposition'] = 'attachment; filename="search.csv"'
     return response
-
-

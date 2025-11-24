@@ -24,7 +24,9 @@
       </div>
    </div>
 
-    <script type="text/javascript">
+      <p id="node_cache_hint" class="text-muted small cache-hint" style="margin-top: 10px;"></p>
+
+      <script type="text/javascript">
         $(document).ready( function () {
             // datatable
             var table = $('#node_table').DataTable({
@@ -42,6 +44,10 @@
                "ajax": {
                   "url": "{% url 'API:api_node_status' %}",
                },
+            });
+
+            table.on('xhr.dt', function (e, settings, json) {
+               updateCacheHint('#node_cache_hint', json && json.cache ? json.cache : null, 'Node snapshot');
             });
  
             function autoRefresh()
@@ -80,6 +86,7 @@
             </tr>
             </thead>
          </table>
+         <p id="hashfile_cache_hint" class="text-muted small cache-hint" style="margin-top: 10px;"></p>
          </br>
          <button type="button" class="btn btn-primary btn-xs" data-toggle="modal" data-target="#action_add" title="Add a new hashfile">Add</button></td>
 
@@ -118,6 +125,10 @@
             "order": [[1, 'asc']]
          });
 
+         hashfile_table.on('xhr.dt', function (e, settings, json) {
+            updateCacheHint('#hashfile_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
+         });
+
          function sub_DataTable(vtask_id, table_id) {
              var subtable = $('table#'+table_id).DataTable({
                   "processing": false,
@@ -145,6 +156,10 @@
                      { "data": "buttons", "width": "6%", "targets": 8},
                   ],
              });
+
+                   subtable.on('xhr.dt', function (e, settings, json) {
+                     updateCacheHint('#hashfile_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
+                   });
          }
 
          function format ( table_id ) {
@@ -322,13 +337,13 @@
             <div class="modal-body">
                <!-- Nav tabs -->
                <ul class="nav nav-tabs" role="tablist">
-                  <li class="active" ><a href="#dictionary_bruteforce" aria-controls="rule_bruteforce" role="tab" data-toggle="tab">Dictionary-based bruteforce</a></li>
+                  <li class="active" ><a href="#dictionary_bruteforce" aria-controls="dictionary_bruteforce" role="tab" data-toggle="tab">Dictionary-based bruteforce</a></li>
                   <li><a href="#mask_bruteforce" aria-controls="mask_bruteforce" role="tab" data-toggle="tab">Mask-based bruteforce</a></li>
                </ul>
 
                <!-- Tab panes -->
                <div class="tab-content">
-                  <div role="tabpanel" class="tab-pane active" id="dictonary_bruteforce">
+                  <div role="tabpanel" class="tab-pane active" id="dictionary_bruteforce">
 
                      <form action="{% url "Hashcat:new_session" %}" enctype="multipart/form-data" method="post">
                      {% csrf_token %}
@@ -338,7 +353,7 @@
 
                      <label for="node">Node</label>
                      </br>
-                     <select name="node" id="node">
+                     <select name="node" id="node_mask">
                         {% for node in node_list %}
                         <option value="{{ node.name }}">{{ node.name }}</option>
                         {% endfor %}
@@ -368,11 +383,8 @@
 
                      <label for="device_type">Device Type</label>
                      </br>
-                     <select name="device_type" id="device_type">
-                        <option value="2">GPU</option>
-                        <option value="1">CPU</option>
-                        <option value="3">FPGA, DSP, Co-Processor</option>
-                     </select>
+                     <div id="device_type_label_dict" class="form-control-static">Detecting from node…</div>
+                     <input type="hidden" name="device_type" id="device_type_input_dict" value="1">
                      </br>
                      </br>
 
@@ -422,7 +434,7 @@
 
                      <label for="node">Node</label>
                      </br>
-                     <select name="node" id="node">
+                     <select name="node" id="node_dict">
                         {% for node in node_list %}
                         <option value="{{ node.name }}">{{ node.name }}</option>
                         {% endfor %}
@@ -443,11 +455,8 @@
 
                      <label for="device_type">Device Type</label>
                      </br>
-                     <select name="device_type" id="device_type">
-                        <option value="2">GPU</option>
-                        <option value="1">CPU</option>
-                        <option value="3">FPGA, DSP, Co-Processor</option>
-                     </select>
+                     <div id="device_type_label_mask" class="form-control-static">Detecting from node…</div>
+                     <input type="hidden" name="device_type" id="device_type_input_mask" value="1">
                      </br>
                      </br>
 
@@ -485,15 +494,37 @@
    </div>
 
    <script type="text/javascript">
+      const nodeDeviceMap = {{ node_device_map_json|default:"{}"|safe }};
+
+      function deviceTypeLabel(value) {
+         if (value === 2) return "GPU (from node)";
+         if (value === 3) return "FPGA/DSP/Co-processor (from node)";
+         return "CPU (from node)";
+      }
+
+      function updateDeviceDisplay(selectSelector, labelSelector, inputSelector) {
+         const nodeName = $(selectSelector).val();
+         const dtype = nodeDeviceMap[nodeName] || 1;
+         $(labelSelector).text(deviceTypeLabel(dtype));
+         $(inputSelector).val(dtype);
+      }
+
+      $('#node_dict').on('change', function() {
+         updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict');
+      });
+      $('#node_mask').on('change', function() {
+         updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask');
+      });
+
       $('#action_new').on('show.bs.modal', function (event) {
          var button = $(event.relatedTarget) // Button that triggered the modal
          var hashfile_name = button.data('hashfile') // Extract info from data-* attributes
          var hashfile_id = button.data('hashfile_id') // Extract info from data-* attributes
-         // If necessary, you could initiate an AJAX request here (and then do the updating in a callback).
-         // Update the modal's content. We'll use jQuery here, but you could use a data binding library or other methods instead.
          var modal = $(this)
          modal.find('.modal-title').text(hashfile_name + ': New session')
          modal.find('input#hashfile_id').val(hashfile_id)
+         updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict');
+         updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask');
       })
    </script>
 

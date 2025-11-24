@@ -2,18 +2,23 @@
 import base64
 import hashlib
 import json
-import os
+import logging
 import random
 import string
 import traceback
 from pathlib import Path
 
 from flask import Flask, request
+from flask_compress import Compress
 from flask_httpauth import HTTPBasicAuth
 
-from hashcat import Hashcat
+try:  # Support package-relative imports when HashcatNode is a module
+    from .hashcat import Hashcat  # type: ignore
+except ImportError:  # pragma: no cover - fallback for direct execution
+    from hashcat import Hashcat
 
 auth = HTTPBasicAuth()
+LOGGER = logging.getLogger(__name__)
 
 
 @auth.verify_password
@@ -26,10 +31,11 @@ def verify_password(username, password):
 
 class Server:
 
-    def __init__(self, host, port, auth_user, auth_hash, hash_directory):
+    def __init__(self, host, port, auth_user, auth_hash, hash_directory, cert_path, key_path):
         self._host = host
         self._port = int(port)
         self._app = Flask(__name__)
+        Compress(self._app)
         self._route()
 
         global httpauth_user
@@ -38,6 +44,8 @@ class Server:
         httpauth_hash = auth_hash
 
         self.hash_directory = hash_directory
+        self._cert_path = cert_path
+        self._key_path = key_path
 
     def _route(self):
         self._app.add_url_rule("/hashcatInfo", "hashcatInfo", self._hashcatInfo, methods=["GET"])
@@ -55,8 +63,9 @@ class Server:
         self._app.add_url_rule("/uploadWordlist", "uploadWordlist", self._upload_wordlist, methods=["POST"])
 
     def start_server(self):
-        base_dir = os.path.dirname(__file__)
-        context = (base_dir + '/server.crt', base_dir + '/server.key')
+        context = (self._cert_path, self._key_path)
+        LOGGER.info("Starting HTTPS server on %s:%s using cert=%s key=%s", self._host, self._port, self._cert_path,
+                    self._key_path)
         self._app.run(host=self._host, port=self._port, ssl_context=context, threaded=True)
 
     """
@@ -98,6 +107,7 @@ class Server:
                 "masks": masks,
                 "sessions": sessions,
                 "wordlists": wordlists,
+                "device_type": Hashcat.default_device_type,
             }
 
             return json.dumps(result)
@@ -257,7 +267,7 @@ class Server:
                 data["rule"] if "rule" in data else None,
                 data["mask"] if "mask" in data else None,
                 data["username_included"],
-                int(data["device_type"]),
+                Hashcat.default_device_type,
                 int(data["brain_mode"]),
                 int(data["end_timestamp"]) if data["end_timestamp"] != None else None,
                 data["hashcat_debug_file"],

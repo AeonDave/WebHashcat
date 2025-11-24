@@ -1,22 +1,25 @@
-import functools
 import redis
+from django.conf import settings
 from django.db import transaction
+
 from .models import Lock
+
 
 def init_hashfile_locks(hashfile):
     # Create locks in database
 
     lock_potfile = Lock(
-        hashfile = hashfile,
+        hashfile=hashfile,
         lock_ressource="potfile",
     )
     lock_potfile.save()
 
     lock_hashfile = Lock(
-        hashfile = hashfile,
+        hashfile=hashfile,
         lock_ressource="hashfile",
     )
     lock_hashfile.save()
+
 
 def del_hashfile_locks(hashfile):
     # Remove locks in database
@@ -30,13 +33,15 @@ class Echo:
     """An object that implements just the write method of the file-like
     interface.
     """
+
     def write(self, value):
         """Write the value by returning it, instead of storing in a buffer."""
         return value
 
 
-from WebHashcat.settings import CELERY_BROKER_URL
-REDIS_CLIENT = redis.Redis.from_url(CELERY_BROKER_URL)
+broker_url = getattr(settings, "CELERY_BROKER_URL", "redis://localhost:6379/0")
+REDIS_CLIENT = redis.Redis.from_url(broker_url)
+
 
 def only_one(function=None, key="", timeout=None):
     """Enforce only one celery task at a time."""

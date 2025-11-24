@@ -1,100 +1,145 @@
+import base64
+import binascii
+import datetime
 import json
-import csv
-import random
-import string
 import os
 import os.path
-import tempfile
-import humanize
-import time
-import traceback
-import datetime
-import requests
-import base64
+import random
+import string
 from collections import OrderedDict
 
-from django.shortcuts import render
-from django.shortcuts import redirect
-from django.template import loader
-from django.urls import reverse
+import humanize
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import User
+from django.db import connection
+from django.db.models import Q
+from django.db.models import Sum
 from django.http import Http404
 from django.http import HttpResponse
-from django.contrib.auth.decorators import login_required
-from django.middleware.csrf import get_token
-from django.db.models import Q, Count, BinaryField
-from django.db.models.functions import Cast
-from django.db import connection
-from django.contrib import messages
-from django.db.models import Sum
+from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 
-from django.shortcuts import get_object_or_404
-
-from operator import itemgetter
-
-from django.contrib.auth.models import User
 from Hashcat.models import Hashfile, Session, Hash, Search
 from Nodes.models import Node
-from Utils.models import Task
-
-from Utils.hashcatAPI import HashcatAPI
 from Utils.hashcat import Hashcat
-from Utils.utils import del_hashfile_locks, Echo
+from Utils.hashcatAPI import HashcatAPI, HashcatAPIError
+from Utils.hashcat_cache import HashcatSnapshotCache
+from Utils.models import Task
+from Utils.session_snapshot import SessionSnapshot
+from Utils.tasks import import_hashfile_task, run_search_task
 from Utils.tasks import remove_hashfile_task
 from Utils.utils import init_hashfile_locks
-from Utils.tasks import import_hashfile_task, run_search_task
+
+
+def _get_cache_and_snapshot():
+    cache = HashcatSnapshotCache()
+    snapshot = cache.get_snapshot()
+    metadata = cache.get_metadata(snapshot)
+    return cache, snapshot, metadata
+
+
+def _node_snapshots(snapshot):
+    return snapshot.get("nodes", {}) if snapshot else {}
+
+
+def _session_snapshots(snapshot):
+    return snapshot.get("sessions", {}) if snapshot else {}
+
+
+def _session_row_from_cache(session, cached):
+    crack_type = cached.get("crack_type")
+    if crack_type == "dictionary":
+        rule_mask = cached.get("rule")
+        wordlist = cached.get("wordlist")
+    elif crack_type == "mask":
+        rule_mask = cached.get("mask")
+        wordlist = ""
+    else:
+        rule_mask = ""
+        wordlist = ""
+
+    progress_value = cached.get("progress")
+    progress_display = "%s %%" % progress_value if progress_value is not None else ""
+    speed_value = cached.get("speed") or ""
+
+    return {
+        "hashfile": session.hashfile.name,
+        "node": cached.get("node_name") or session.node.name,
+        "type": crack_type,
+        "rule_mask": rule_mask or "",
+        "wordlist": wordlist or "",
+        "remaining": cached.get("time_estimated") or "",
+        "progress": progress_display,
+        "speed": speed_value,
+    }
+
+
+def _error_session_row(session, status="Node data unavailable", reason=""):
+    return {
+        "hashfile": session.hashfile.name,
+        "node": session.node.name,
+        "type": "",
+        "rule_mask": "",
+        "wordlist": "",
+        "status": status,
+        "reason": reason,
+    }
+
+
+def _hash_type_label(hash_type_id: int) -> str:
+    if hash_type_id == -1:
+        return "Plaintext"
+    return Hashcat.get_hash_types().get(hash_type_id, {}).get("name", f"Unknown ({hash_type_id})")
+
+
+def _paginate_queryset(params, queryset, order_fields):
+    total = queryset.count()
+    search_value = params.get("search[value]", "")
+    if search_value:
+        queryset = queryset.filter(name__contains=search_value)
+    filtered = queryset.count()
+
+    order_index = int(params.get("order[0][column]", "0"))
+    order_dir = params.get("order[0][dir]", "asc")
+    sort_field = order_fields[order_index]
+    sort_field = "-" + sort_field if order_dir == "desc" else sort_field
+
+    queryset = queryset.order_by(sort_field)
+    start = int(params.get("start", 0))
+    length = int(params.get("length", 10))
+    return queryset[start:start + length], total, filtered
+
+
 # Create your views here.
 
 @login_required
 def api_node_status(request):
-    if request.method == "POST":
-        params = request.POST
-    else:
-        params = request.GET
-
+    params = request.POST if request.method == "POST" else request.GET
+    draw = params.get("draw", "0")
     result = {
-        "draw": params["draw"],
+        "draw": draw,
     }
 
-    node_object_list = Node.objects.all()
+    cache, snapshot, metadata = _get_cache_and_snapshot()
+    node_snapshots = _node_snapshots(snapshot)
 
     data = []
-    for node in node_object_list:
-        try:
-            hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
-            node_data = hashcat_api.get_hashcat_info()
-
-            status = "Stopped"
-            for session in node_data["sessions"]:
-                if session["status"] == "Running":
-                    status = "Running"
-                    break
-
-            data.append([
-                node.name,
-                node_data["version"],
-                status,
-            ])
-        except ConnectionRefusedError:
-            data.append([
-                node.name,
-                "",
-                "Error",
-            ])
-        except requests.exceptions.ConnectionError:
-            data.append([
-                node.name,
-                "",
-                "Error",
-            ])
+    for node in Node.objects.all():
+        cached = node_snapshots.get(str(node.id))
+        version = cached.get("version") if cached else ""
+        status = cached.get("status") if cached else "Unknown"
+        data.append([
+            node.name,
+            version or "",
+            status or "Unknown",
+        ])
 
     result["data"] = data
-
-    for query in connection.queries[-1:]:
-        print(query["sql"])
-        print(query["time"])
+    result["cache"] = metadata
 
     return HttpResponse(json.dumps(result), content_type="application/json")
+
 
 @login_required
 def api_statistics(request):
@@ -114,7 +159,8 @@ def api_statistics(request):
         count_cracked = Hashfile.objects.aggregate(Sum('cracked_count'))["cracked_count__sum"]
     else:
         count_lines = Hashfile.objects.filter(owner=request.user).aggregate(Sum('line_count'))["line_count__sum"]
-        count_cracked = Hashfile.objects.filter(owner=request.user).aggregate(Sum('cracked_count'))["cracked_count__sum"]
+        count_cracked = Hashfile.objects.filter(owner=request.user).aggregate(Sum('cracked_count'))[
+            "cracked_count__sum"]
 
     if count_cracked == None:
         count_cracked = 0
@@ -123,13 +169,15 @@ def api_statistics(request):
         data.append(["<b>Cracked</b>", "%s (%.2f%%)" % (humanize.intcomma(count_cracked), 0)])
     else:
         data.append(["<b>Lines</b>", humanize.intcomma(count_lines)])
-        data.append(["<b>Cracked</b>", "%s (%.2f%%)" % (humanize.intcomma(count_cracked), count_cracked/count_lines*100.0 if count_lines != 0 else 0.0)])
+        data.append(["<b>Cracked</b>", "%s (%.2f%%)" % (humanize.intcomma(count_cracked),
+                                                        count_cracked / count_lines * 100.0 if count_lines != 0 else 0.0)])
     data.append(["<b>Hashfiles</b>", Hashfile.objects.count()])
     data.append(["<b>Nodes</b>", Node.objects.count()])
 
     result["data"] = data
 
     return HttpResponse(json.dumps(result), content_type="application/json")
+
 
 @login_required
 def api_cracked_ratio(request):
@@ -143,7 +191,8 @@ def api_cracked_ratio(request):
         count_cracked = Hashfile.objects.aggregate(Sum('cracked_count'))["cracked_count__sum"]
     else:
         count_lines = Hashfile.objects.filter(owner=request.user).aggregate(Sum('line_count'))["line_count__sum"]
-        count_cracked = Hashfile.objects.filter(owner=request.user).aggregate(Sum('cracked_count'))["cracked_count__sum"]
+        count_cracked = Hashfile.objects.filter(owner=request.user).aggregate(Sum('cracked_count'))[
+            "cracked_count__sum"]
 
     if count_cracked == None:
         count_cracked = 0
@@ -154,8 +203,8 @@ def api_cracked_ratio(request):
         ]
     else:
         result = [
-            ["Cracked", count_cracked/count_lines*100.0 if count_lines != 0 else 0.0],
-            ["Uncracked", (1-count_cracked/count_lines)*100.0 if count_lines != 0 else 0.0],
+            ["Cracked", count_cracked / count_lines * 100.0 if count_lines != 0 else 0.0],
+            ["Uncracked", (1 - count_cracked / count_lines) * 100.0 if count_lines != 0 else 0.0],
         ]
 
     return HttpResponse(json.dumps(result), content_type="application/json")
@@ -163,112 +212,84 @@ def api_cracked_ratio(request):
 
 @login_required
 def api_running_sessions(request):
-    if request.method == "POST":
-        params = request.POST
-    else:
-        params = request.GET
-
+    params = request.POST if request.method == "POST" else request.GET
+    draw = params.get("draw", "0")
     result = {
-        "draw": params["draw"],
+        "draw": draw,
     }
 
-    data = []
+    cache, snapshot, metadata = _get_cache_and_snapshot()
+    session_snapshots = _session_snapshots(snapshot)
+
     if request.user.is_staff:
         session_list = Session.objects.all()
     else:
         session_list = Session.objects.filter(hashfile__owner=request.user)
 
+    session_list = session_list.select_related("hashfile", "node")
+
+    data = []
     for session in session_list:
-        node = session.node
+        cached = session_snapshots.get(session.name)
+        if not cached or cached.get("response") == "error" or cached.get("status") != "Running":
+            continue
 
-        try:
-            hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
-            session_info = hashcat_api.get_session_info(session.name)
-
-            if session_info['response'] != 'error' and session_info["status"] == "Running":
-                if session_info["crack_type"] == "dictionary":
-                    rule_mask = session_info["rule"]
-                    wordlist = session_info["wordlist"]
-                elif session_info["crack_type"] == "mask":
-                    rule_mask = session_info["mask"]
-                    wordlist = ""
-
-                data.append({
-                    "hashfile": session.hashfile.name,
-                    "node": node.name,
-                    "type": session_info["crack_type"],
-                    "rule_mask": rule_mask,
-                    "wordlist": wordlist,
-                    "remaining": session_info["time_estimated"],
-                    "progress": "%s %%" % session_info["progress"],
-                    "speed": session_info["speed"].split('@')[0].strip(),
-                })
-        except ConnectionRefusedError:
-            pass
+        snapshot = SessionSnapshot.from_api_response(session.name, cached.get("node_name") or session.node.name,
+                                                     session.node.id, cached)
+        data.append(snapshot.as_running_row(session.hashfile.name))
 
     result["data"] = data
+    result["cache"] = metadata
 
     return HttpResponse(json.dumps(result), content_type="application/json")
+
 
 @login_required
 def api_error_sessions(request):
-    if request.method == "POST":
-        params = request.POST
-    else:
-        params = request.GET
-
+    params = request.POST if request.method == "POST" else request.GET
+    draw = params.get("draw", "0")
     result = {
-        "draw": params["draw"],
+        "draw": draw,
     }
 
-    data = []
+    cache, snapshot, metadata = _get_cache_and_snapshot()
+    session_snapshots = _session_snapshots(snapshot)
+
     if request.user.is_staff:
         session_list = Session.objects.all()
     else:
         session_list = Session.objects.filter(hashfile__owner=request.user)
 
+    session_list = session_list.select_related("hashfile", "node")
+
+    healthy_statuses = {"Not started", "Running", "Paused", "Done"}
+    data = []
+
     for session in session_list:
-        node = session.node
+        cached = session_snapshots.get(session.name)
+        node_name = cached.get("node_name") if cached else session.node.name
 
-        try:
-            hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
-            session_info = hashcat_api.get_session_info(session.name)
+        if cached is None:
+            data.append(_error_session_row(session, status="Node data unavailable"))
+            continue
 
-            if session_info['response'] != 'error' and not session_info["status"] in ["Not started", "Running", "Paused", "Done"]:
-                if session_info["crack_type"] == "dictionary":
-                    rule_mask = session_info["rule"]
-                    wordlist = session_info["wordlist"]
-                elif session_info["crack_type"] == "mask":
-                    rule_mask = session_info["mask"]
-                    wordlist = ""
+        if cached.get("response") == "error":
+            snapshot = SessionSnapshot.from_error(session.name, node_name, session.node.id,
+                                                  cached.get("reason") or cached.get("error") or "")
+            data.append(snapshot.as_error_row(session.hashfile.name, status_override="Inexistant session on node"))
+            continue
 
-                data.append({
-                    "hashfile": session.hashfile.name,
-                    "node": node.name,
-                    "type": session_info["crack_type"],
-                    "rule_mask": rule_mask,
-                    "wordlist": wordlist,
-                    "status": session_info["status"],
-                    "reason": session_info["reason"],
-                })
-            elif session_info['response'] == 'error':
-                data.append({
-                    "hashfile": session.hashfile.name,
-                    "node": node.name,
-                    "type": "",
-                    "rule_mask": "",
-                    "wordlist": "",
-                    "status": "Inexistant session on node",
-                    "reason": "",
-                })
+        status_value = cached.get("status")
+        if status_value in healthy_statuses:
+            continue
 
-        except ConnectionRefusedError:
-            pass
+        snapshot = SessionSnapshot.from_api_response(session.name, node_name, session.node.id, cached)
+        data.append(snapshot.as_error_row(session.hashfile.name, status_override=status_value or "Unknown"))
 
     result["data"] = data
+    result["cache"] = metadata
 
     return HttpResponse(json.dumps(result), content_type="application/json")
-
 
 
 @login_required
@@ -282,187 +303,163 @@ def api_hashfiles(request):
         "draw": params["draw"],
     }
 
+    cache, snapshot, metadata = _get_cache_and_snapshot()
+
     session_status = {}
-
-    node_object_list = Node.objects.all()
-    for node in node_object_list:
-        try:
-            hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
-            hashcat_info = hashcat_api.get_hashcat_info()
-            for session in hashcat_info["sessions"]:
-                session_status[session["name"]] = session["status"]
-        except requests.exceptions.ConnectionError:
-            pass
-        except ConnectionRefusedError:
-            pass
-        except requests.exceptions.ConnectTimeout:
-            pass
-
+    if snapshot:
+        for node_snapshot in snapshot.get("nodes", {}).values():
+            for session in node_snapshot.get("sessions", []):
+                session_name = session.get("name")
+                if session_name:
+                    session_status[session_name] = session.get("status")
 
     if request.user.is_staff:
         hashfile_list = Hashfile.objects
     else:
         hashfile_list = Hashfile.objects.filter(owner=request.user)
 
-
-    sort_index = ["name", "name", "hash_type", "line_count", "cracked_count", "name", "name", "name"][int(params["order[0][column]"])]
-    sort_index = "-" + sort_index if params["order[0][dir]"] == "desc" else sort_index
-    hashfile_list = hashfile_list.filter(name__contains=params["search[value]"]).order_by(sort_index)[int(params["start"]):int(params["start"])+int(params["length"])]
+    order_fields = ["name", "name", "hash_type", "line_count", "cracked_count", "name", "name", "name"]
+    hashfile_list, records_total, records_filtered = _paginate_queryset(params, hashfile_list, order_fields)
 
     data = []
     for hashfile in hashfile_list:
-            buttons = "<a href='%s'><button title='Export cracked results' class='btn btn-info btn-xs' ><span class='glyphicon glyphicon-download-alt'></span></button></a>" % reverse('Hashcat:export_cracked', args=(hashfile.id,))
-            buttons += "<button title='Create new cracking session' style='margin-left: 5px' class='btn btn-primary btn-xs' data-toggle='modal' data-target='#action_new' data-hashfile='%s' data-hashfile_id=%d ><span class='glyphicon glyphicon-plus'></span></button>" % (hashfile.name, hashfile.id)
-            buttons += "<button title='Remove hashfile' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='hashfile_action(%d, \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (hashfile.id, "remove")
+        buttons = "<a href='%s'><button title='Export cracked results' class='btn btn-info btn-xs' ><span class='glyphicon glyphicon-download-alt'></span></button></a>" % reverse(
+            'Hashcat:export_cracked', args=(hashfile.id,))
+        buttons += "<button title='Create new cracking session' style='margin-left: 5px' class='btn btn-primary btn-xs' data-toggle='modal' data-target='#action_new' data-hashfile='%s' data-hashfile_id=%d ><span class='glyphicon glyphicon-plus'></span></button>" % (
+            hashfile.name, hashfile.id)
+        buttons += "<button title='Remove hashfile' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='hashfile_action(%d, \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (
+            hashfile.id, "remove")
 
-            buttons = "<div style='float: right'>%s</div>" % buttons
+        buttons = "<div style='float: right'>%s</div>" % buttons
 
-            running_session_count = 0
-            total_session_count =  Session.objects.filter(hashfile_id=hashfile.id).count()
-            for session in Session.objects.filter(hashfile_id=hashfile.id):
-                try:
-                    if session_status[session.name] == "Running":
-                        running_session_count += 1
-                except KeyError:
-                    pass
+        running_session_count = 0
+        total_session_count = Session.objects.filter(hashfile_id=hashfile.id).count()
+        for session in Session.objects.filter(hashfile_id=hashfile.id):
+            try:
+                if session_status.get(session.name) == "Running":
+                    running_session_count += 1
+            except KeyError:
+                pass
 
-
-            data.append({
-                "DT_RowId": "row_%d" % hashfile.id,
-                "name": "<a href='%s'>%s<a/>" % (reverse('Hashcat:hashfile', args=(hashfile.id,)), hashfile.name),
-                "type": "Plaintext" if hashfile.hash_type == -1 else Hashcat.get_hash_types()[hashfile.hash_type]["name"],
-                "line_count": humanize.intcomma(hashfile.line_count),
-                "cracked": "%s (%.2f%%)" % (humanize.intcomma(hashfile.cracked_count), hashfile.cracked_count/hashfile.line_count*100) if hashfile.line_count > 0 else "0",
-                "username_included": "yes" if hashfile.username_included else "no",
-                "sessions_count": "%d / %d" % (running_session_count, total_session_count),
-                "buttons": buttons,
-            })
+        data.append({
+            "DT_RowId": "row_%d" % hashfile.id,
+            "name": "<a href='%s'>%s<a/>" % (reverse('Hashcat:hashfile', args=(hashfile.id,)), hashfile.name),
+            "type": _hash_type_label(hashfile.hash_type),
+            "line_count": humanize.intcomma(hashfile.line_count),
+            "cracked": "%s (%.2f%%)" % (humanize.intcomma(hashfile.cracked_count),
+                                        hashfile.cracked_count / hashfile.line_count * 100) if hashfile.line_count > 0 else "0",
+            "username_included": "yes" if hashfile.username_included else "no",
+            "sessions_count": "%d / %d" % (running_session_count, total_session_count),
+            "buttons": buttons,
+        })
 
     result["data"] = data
 
-
-    if request.user.is_staff:
-        result["recordsTotal"] = Hashfile.objects.all().count()
-        result["recordsFiltered"] = Hashfile.objects.filter(name__contains=params["search[value]"]).count()
-    else:
-        result["recordsTotal"] = Hashfile.objects.filter(owner=request.user).count()
-        result["recordsFiltered"] = Hashfile.objects.filter(owner=request.user).filter(name__contains=params["search[value]"]).count()
+    result["recordsTotal"] = records_total
+    result["recordsFiltered"] = records_filtered
 
     for query in connection.queries[-4:]:
         print(query["sql"])
         print(query["time"])
 
+    result["cache"] = metadata
+
     return HttpResponse(json.dumps(result), content_type="application/json")
+
 
 @login_required
 def api_hashfile_sessions(request):
-    if request.method == "POST":
-        params = request.POST
-    else:
-        params = request.GET
-
+    params = request.POST if request.method == "POST" else request.GET
+    draw = params.get("draw", "0")
     result = {
-        "draw": params["draw"],
+        "draw": draw,
     }
 
     hashfile_id = int(params["hashfile_id"][4:] if params["hashfile_id"].startswith("row_") else params["hashfile_id"])
 
+    cache, snapshot, metadata = _get_cache_and_snapshot()
+    session_snapshots = _session_snapshots(snapshot)
+    node_snapshots = _node_snapshots(snapshot)
+
     data = []
-    for session in Session.objects.filter(hashfile_id=hashfile_id):
+    for session in Session.objects.filter(hashfile_id=hashfile_id).select_related("node", "hashfile"):
         node = session.node
         hashfile = session.hashfile
 
         if hashfile.owner != request.user and not request.user.is_staff:
             continue
 
-        try:
-            hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
-            session_info = hashcat_api.get_session_info(session.name)
-            print(session_info)
-            if session_info["response"] != "error":
-                if session_info["status"] == "Not started":
-                    buttons =  "<button title='Start session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (session.name, "start")
-                    buttons +=  "<button title='Remove session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (session.name, "remove")
-                elif session_info["status"] == "Running":
-                    buttons =  "<button title='Pause session' type='button' class='btn btn-warning btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-pause'></span></button>" % (session.name, "pause")
-                    buttons +=  "<button title='Stop session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-stop'></span></button>" % (session.name, "quit")
-                elif session_info["status"] == "Paused":
-                    buttons =  "<button title='Resume session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (session.name, "resume")
-                    buttons +=  "<button title='Stop session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-stop'></span></button>" % (session.name, "quit")
-                else:
-                    buttons =  "<button title='Start session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (session.name, "start")
-                    buttons +=  "<button title='Remove session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (session.name, "remove")
+        cached = session_snapshots.get(session.name)
+        node_label = cached.get("node_name") if cached and cached.get("node_name") else node.name
 
-                buttons = "<div style='float: right'>%s</div>" % buttons
+        if cached is None:
+            node_cached = node_snapshots.get(str(node.id)) if snapshot else None
+            offline = node_cached and node_cached.get("status") == "Error"
+            status_label = "Node not accessible" if offline else "Node data unavailable"
+            data.append({
+                "node": node_label,
+                "type": "",
+                "rule_mask": "",
+                "wordlist": "",
+                "status": status_label,
+                "remaining": "",
+                "progress": "",
+                "speed": "",
+                "buttons": "",
+            })
+            continue
 
-                if session_info["crack_type"] == "dictionary":
-                    rule_mask = session_info["rule"]
-                    wordlist = session_info["wordlist"]
-                elif session_info["crack_type"] == "mask":
-                    rule_mask = session_info["mask"]
-                    wordlist = ""
+        if cached.get("response") == "error":
+            buttons = _render_session_buttons("Error", session.name)
+            status_label = "Inexistant"
+            crack_type = ""
+            rule_mask = ""
+            wordlist = ""
+            remaining = ""
+            progress = ""
+            speed = ""
+        else:
+            status_value = cached.get("status") or "Unknown"
+            buttons = _render_session_buttons(status_value, session.name)
 
-                status = session_info["status"]
-                if status == "Error":
-                    status += ' <a href="#" data-toggle="tooltip" data-placement="right" title="%s"><span class="glyphicon glyphicon-info-sign" aria-hidden="true"></span></a>' % session_info["reason"]
-
-                crack_type = session_info["crack_type"]
-                remaining = session_info["time_estimated"]
-                progress = "%s %%" % session_info["progress"]
-                speed = session_info["speed"]
+            crack_type = cached.get("crack_type")
+            if crack_type == "dictionary":
+                rule_mask = cached.get("rule")
+                wordlist = cached.get("wordlist")
+            elif crack_type == "mask":
+                rule_mask = cached.get("mask")
+                wordlist = ""
             else:
-                status = "Inexistant"
-                crack_type = ""
                 rule_mask = ""
                 wordlist = ""
-                remaining = ""
-                progress = ""
-                speed = ""
-                buttons =  "<button title='Remove session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (session.name, "remove")
 
-            data.append({
-                "node": node.name,
-                "type": crack_type,
-                "rule_mask": rule_mask,
-                "wordlist": wordlist,
-                "status": status,
-                "remaining": remaining,
-                "progress": progress,
-                "speed": speed,
-                "buttons": buttons,
-            })
-        except requests.exceptions.ConnectionError:
-            data.append({
-                "node": node.name,
-                "type": "",
-                "rule_mask": "",
-                "wordlist": "",
-                "status": "Node not accessible",
-                "remaining": "",
-                "progress": "",
-                "speed": "",
-                "buttons": "",
-            })
-        except ConnectionRefusedError:
-            data.append({
-                "node": node.name,
-                "type": "",
-                "rule_mask": "",
-                "wordlist": "",
-                "status": "Node not accessible",
-                "remaining": "",
-                "progress": "",
-                "speed": "",
-                "buttons": "",
-            })
+            status_label = status_value
+            if status_label == "Error" and cached.get("reason"):
+                status_label += ' <a href="#" data-toggle="tooltip" data-placement="right" title="%s"><span class="glyphicon glyphicon-info-sign" aria-hidden="true"></span></a>' % cached.get(
+                    "reason")
+
+            remaining = cached.get("time_estimated") or ""
+            progress_value = cached.get("progress")
+            progress = "%s %%" % progress_value if progress_value is not None else ""
+            speed = cached.get("speed") or ""
+
+        data.append({
+            "node": node_label,
+            "type": crack_type,
+            "rule_mask": rule_mask,
+            "wordlist": wordlist,
+            "status": status_label,
+            "remaining": remaining,
+            "progress": progress,
+            "speed": speed,
+            "buttons": buttons,
+        })
 
     result["data"] = data
-
-    for query in connection.queries[-1:]:
-        print(query["sql"])
-        print(query["time"])
+    result["cache"] = metadata
 
     return HttpResponse(json.dumps(result), content_type="application/json")
+
 
 @login_required
 def api_hashfile_cracked(request, hashfile_id):
@@ -491,18 +488,30 @@ def api_hashfile_cracked(request, hashfile_id):
 
     if len(params["search[value]"]) == 0:
         if hashfile.username_included:
-            cracked_list = Hash.objects.filter(password__isnull=False, hashfile_id=hashfile.id).order_by(sort_index)[int(params["start"]):int(params["start"])+int(params["length"])]
+            cracked_list = Hash.objects.filter(password__isnull=False, hashfile_id=hashfile.id).order_by(sort_index)[
+                int(params["start"]):int(params["start"]) + int(params["length"])]
             filtered_count = total_count
         else:
-            cracked_list = Hash.objects.filter(password__isnull=False, hashfile_id=hashfile.id).order_by(sort_index)[int(params["start"]):int(params["start"])+int(params["length"])]
+            cracked_list = Hash.objects.filter(password__isnull=False, hashfile_id=hashfile.id).order_by(sort_index)[
+                int(params["start"]):int(params["start"]) + int(params["length"])]
             filtered_count = total_count
     else:
         if hashfile.username_included:
-            cracked_list = Hash.objects.filter(Q(username__contains=params["search[value]"]) | Q(password__contains=params["search[value]"]), password__isnull=False, hashfile_id=hashfile.id).order_by(sort_index)[int(params["start"]):int(params["start"])+int(params["length"])]
-            filtered_count = Hash.objects.filter(Q(username__contains=params["search[value]"]) | Q(password__contains=params["search[value]"]), password__isnull=False, hashfile_id=hashfile.id).count()
+            cracked_list = Hash.objects.filter(
+                Q(username__contains=params["search[value]"]) | Q(password__contains=params["search[value]"]),
+                password__isnull=False, hashfile_id=hashfile.id).order_by(sort_index)[
+                int(params["start"]):int(params["start"]) + int(params["length"])]
+            filtered_count = Hash.objects.filter(
+                Q(username__contains=params["search[value]"]) | Q(password__contains=params["search[value]"]),
+                password__isnull=False, hashfile_id=hashfile.id).count()
         else:
-            cracked_list = Hash.objects.filter(Q(hash__contains=params["search[value]"]) | Q(password__contains=params["search[value]"]), password__isnull=False, hashfile_id=hashfile.id).order_by(sort_index)[int(params["start"]):int(params["start"])+int(params["length"])]
-            filtered_count = Hash.objects.filter(Q(hash__contains=params["search[value]"]) | Q(password__contains=params["search[value]"]), password__isnull=False, hashfile_id=hashfile.id).count()
+            cracked_list = Hash.objects.filter(
+                Q(hash__contains=params["search[value]"]) | Q(password__contains=params["search[value]"]),
+                password__isnull=False, hashfile_id=hashfile.id).order_by(sort_index)[
+                int(params["start"]):int(params["start"]) + int(params["length"])]
+            filtered_count = Hash.objects.filter(
+                Q(hash__contains=params["search[value]"]) | Q(password__contains=params["search[value]"]),
+                password__isnull=False, hashfile_id=hashfile.id).count()
 
     data = []
     for cracked in cracked_list:
@@ -521,6 +530,7 @@ def api_hashfile_cracked(request, hashfile_id):
 
     return HttpResponse(json.dumps(result), content_type="application/json")
 
+
 @login_required
 def api_hashfile_top_password(request, hashfile_id, N):
     if request.method == "POST":
@@ -533,7 +543,9 @@ def api_hashfile_top_password(request, hashfile_id, N):
     if hashfile.owner != request.user and not request.user.is_staff:
         raise Http404("You do not have permission to view this object.")
 
-    pass_count_list = Hash.objects.raw("SELECT 1 AS id, MAX(password) AS password, COUNT(*) AS count FROM Hashcat_hash WHERE hashfile_id=%s AND password IS NOT NULL GROUP BY BINARY password ORDER BY count DESC LIMIT 10", [hashfile.id])
+    pass_count_list = Hash.objects.raw(
+        "SELECT 1 AS id, MAX(password) AS password, COUNT(*) AS count FROM Hashcat_hash WHERE hashfile_id=%s AND password IS NOT NULL GROUP BY BINARY password ORDER BY count DESC LIMIT 10",
+        [hashfile.id])
 
     top_password_list = []
     count_list = []
@@ -552,6 +564,7 @@ def api_hashfile_top_password(request, hashfile_id, N):
 
     return HttpResponse(json.dumps(res), content_type="application/json")
 
+
 @login_required
 def api_hashfile_top_password_len(request, hashfile_id, N):
     if request.method == "POST":
@@ -565,7 +578,9 @@ def api_hashfile_top_password_len(request, hashfile_id, N):
         raise Http404("You do not have permission to view this object.")
 
     # didn't found the correct way in pure django...
-    pass_count_list = Hash.objects.raw("SELECT 1 AS id, MAX(password_len) AS password_len, COUNT(*) AS count FROM Hashcat_hash WHERE hashfile_id=%s AND password IS NOT NULL GROUP BY password_len", [hashfile.id])
+    pass_count_list = Hash.objects.raw(
+        "SELECT 1 AS id, MAX(password_len) AS password_len, COUNT(*) AS count FROM Hashcat_hash WHERE hashfile_id=%s AND password IS NOT NULL GROUP BY password_len",
+        [hashfile.id])
 
     min_len = None
     max_len = None
@@ -582,7 +597,7 @@ def api_hashfile_top_password_len(request, hashfile_id, N):
         len_count[item.password_len] = item.count
 
     if min_len != None and max_len != None:
-        for length in range(min_len, max_len+1):
+        for length in range(min_len, max_len + 1):
             if not length in len_count:
                 len_count[length] = 0
 
@@ -599,6 +614,7 @@ def api_hashfile_top_password_len(request, hashfile_id, N):
 
     return HttpResponse(json.dumps(res), content_type="application/json")
 
+
 @login_required
 def api_hashfile_top_password_charset(request, hashfile_id, N):
     if request.method == "POST":
@@ -612,7 +628,9 @@ def api_hashfile_top_password_charset(request, hashfile_id, N):
         raise Http404("You do not have permission to view this object.")
 
     # didn't found the correct way in pure django...
-    pass_count_list = Hash.objects.raw("SELECT 1 AS id, MAX(password_charset) AS password_charset, COUNT(*) AS count FROM Hashcat_hash WHERE hashfile_id=%s AND password IS NOT NULL GROUP BY password_charset ORDER BY count DESC LIMIT 10", [hashfile.id])
+    pass_count_list = Hash.objects.raw(
+        "SELECT 1 AS id, MAX(password_charset) AS password_charset, COUNT(*) AS count FROM Hashcat_hash WHERE hashfile_id=%s AND password IS NOT NULL GROUP BY password_charset ORDER BY count DESC LIMIT 10",
+        [hashfile.id])
 
     password_charset_list = []
     count_list = []
@@ -631,6 +649,7 @@ def api_hashfile_top_password_charset(request, hashfile_id, N):
 
     return HttpResponse(json.dumps(res), content_type="application/json")
 
+
 @login_required
 def api_session_action(request):
     if request.method == "POST":
@@ -640,18 +659,28 @@ def api_session_action(request):
 
     session = get_object_or_404(Session, name=params["session_name"])
 
+    hashfile = session.hashfile
+
     if hashfile.owner != request.user and not request.user.is_staff:
         raise Http404("You do not have permission to view this object.")
 
     node = session.node
 
-    hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
-    res = hashcat_api.action(session.name, params["action"])
+    try:
+        hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+        res = hashcat_api.action(session.name, params["action"])
+    except HashcatAPIError as exc:
+        return HttpResponse(
+            json.dumps({"response": "error", "message": str(exc)}),
+            content_type="application/json",
+            status=502,
+        )
 
     if params["action"] == "remove":
         session.delete()
 
     return HttpResponse(json.dumps(res), content_type="application/json")
+
 
 @login_required
 def api_hashfile_action(request):
@@ -665,12 +694,13 @@ def api_hashfile_action(request):
     if hashfile.owner != request.user and not request.user.is_staff:
         raise Http404("You do not have permission to view this object.")
 
-    print("Hashfile %s action %s" % (hashfile.name, params["action"])) 
+    print("Hashfile %s action %s" % (hashfile.name, params["action"]))
 
     if params["action"] == "remove":
         remove_hashfile_task.delay(hashfile.id)
 
     return HttpResponse(json.dumps({"result": "success"}), content_type="application/json")
+
 
 def api_get_messages(request):
     if request.method == "POST":
@@ -683,6 +713,7 @@ def api_get_messages(request):
         message_list.append({"message": task.message})
 
     return HttpResponse(json.dumps({"result": "success", "messages": message_list}), content_type="application/json")
+
 
 @login_required
 def api_search_list(request):
@@ -700,19 +731,22 @@ def api_search_list(request):
     else:
         search_list = Search.objects.filter(owner=request.user)
 
-
     sort_index = ["name", "status", "output_lines"][int(params["order[0][column]"])]
     sort_index = "-" + sort_index if params["order[0][dir]"] == "desc" else sort_index
-    search_list = search_list.filter(name__contains=params["search[value]"]).order_by(sort_index)[int(params["start"]):int(params["start"])+int(params["length"])]
+    search_list = search_list.filter(name__contains=params["search[value]"]).order_by(sort_index)[
+        int(params["start"]):int(params["start"]) + int(params["length"])]
 
     data = []
     for search in search_list:
         buttons = ""
         if os.path.exists(search.output_file):
-            buttons = "<a href='%s'><button title='Export search results' class='btn btn-info btn-xs' ><span class='glyphicon glyphicon-download-alt'></span></button></a>" % reverse('Hashcat:export_search', args=(search.id,))
+            buttons = "<a href='%s'><button title='Export search results' class='btn btn-info btn-xs' ><span class='glyphicon glyphicon-download-alt'></span></button></a>" % reverse(
+                'Hashcat:export_search', args=(search.id,))
         if search.status in ["Done", "Aborted", "Error"]:
-            buttons += "<button title='Restart search' style='margin-left: 5px' type='button' class='btn btn-primary btn-xs' onClick='search_action(%d, \"%s\")'><span class='glyphicon glyphicon-refresh'></span></button>" % (search.id, "reload")
-            buttons += "<button title='Remove search' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='search_action(%d, \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (search.id, "remove")
+            buttons += "<button title='Restart search' style='margin-left: 5px' type='button' class='btn btn-primary btn-xs' onClick='search_action(%d, \"%s\")'><span class='glyphicon glyphicon-refresh'></span></button>" % (
+                search.id, "reload")
+            buttons += "<button title='Remove search' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='search_action(%d, \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (
+                search.id, "remove")
 
         buttons = "<div style='float: right'>%s</div>" % buttons
 
@@ -729,6 +763,7 @@ def api_search_list(request):
     result["recordsFiltered"] = Search.objects.filter(name__contains=params["search[value]"]).count()
 
     return HttpResponse(json.dumps(result), content_type="application/json")
+
 
 @login_required
 def api_search_action(request):
@@ -751,61 +786,74 @@ def api_search_action(request):
 
     return HttpResponse(json.dumps({"result": "success"}), content_type="application/json")
 
+
 @csrf_exempt
 def api_upload_file(request):
     auth_header = request.META.get('HTTP_AUTHORIZATION', '')
     token_type, _, credentials = auth_header.partition(' ')
 
-    username, password = base64.b64decode(credentials).decode().split(':')
+    if token_type != 'Basic' or not credentials:
+        return HttpResponse(status=401)
+
+    try:
+        decoded = base64.b64decode(credentials).decode()
+    except (binascii.Error, ValueError):
+        return HttpResponse(status=401)
+
+    if ':' not in decoded:
+        return HttpResponse(status=401)
+
+    username, password = decoded.split(':', 1)
 
     try:
         user = User.objects.get(username=username)
     except User.DoesNotExist:
         return HttpResponse(status=401)
 
-    if not user.is_staff:
-        return HttpResponse(status=401)
-    
-    password_valid = user.check_password(password)
-    if token_type != 'Basic' or not password_valid:
+    if not user.is_staff or not user.check_password(password):
         return HttpResponse(status=401)
 
     if request.method == "POST":
         params = request.POST
     else:
-        return HttpResponse(json.dumps({"result": "error", "value": "Only POST accepted"}), content_type="application/json")
+        return HttpResponse(json.dumps({"result": "error", "value": "Only POST accepted"}),
+                            content_type="application/json")
 
     if not 'name' in params:
-        return HttpResponse(json.dumps({"result": "error", "value": "Please specify the uploaded file name"}), content_type="application/json")
+        return HttpResponse(json.dumps({"result": "error", "value": "Please specify the uploaded file name"}),
+                            content_type="application/json")
     if not 'type' in params:
-        return HttpResponse(json.dumps({"result": "error", "value": "Please specify the uploaded file type"}), content_type="application/json")
+        return HttpResponse(json.dumps({"result": "error", "value": "Please specify the uploaded file type"}),
+                            content_type="application/json")
     if not 'file' in request.FILES:
-        return HttpResponse(json.dumps({"result": "error", "value": "Please upload a file"}), content_type="application/json")
+        return HttpResponse(json.dumps({"result": "error", "value": "Please upload a file"}),
+                            content_type="application/json")
 
     print(params)
 
     if params['type'] == 'hashfile':
         if not 'hash_type' in params:
-            return HttpResponse(json.dumps({"result": "error", "value": "Please specify the hash type"}), content_type="application/json")
+            return HttpResponse(json.dumps({"result": "error", "value": "Please specify the hash type"}),
+                                content_type="application/json")
 
-        hash_type=int(params["hash_type"])
+        hash_type = int(params["hash_type"])
 
         hashfile_name = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".hashfile"
         hashfile_path = os.path.join(os.path.dirname(__file__), "..", "Files", "Hashfiles", hashfile_name)
 
-        f = open(hashfile_path, 'w')
-        for chunk in request.FILES['file'].chunks():
-            f.write(chunk.decode('UTF-8', 'backslashreplace'))
-        f.close()
+        with open(hashfile_path, 'w', encoding='utf-8', errors='backslashreplace') as f:
+            for chunk in request.FILES['file'].chunks():
+                f.write(chunk.decode('UTF-8', 'backslashreplace'))
 
         username_included = "username_included" in params
 
         hashfile = Hashfile(
+            owner=user,
             name=request.POST['name'],
             hashfile=hashfile_name,
             hash_type=hash_type,
             line_count=0,
-            cracked_count = 0,
+            cracked_count=0,
             username_included=username_included,
         )
         hashfile.save()
@@ -814,19 +862,43 @@ def api_upload_file(request):
         # Update the new file with the potfile, this may take a while, but it is processed in a background task
         import_hashfile_task.delay(hashfile.id)
     elif params['type'] == 'wordlist':
-            f = request.FILES["file"]
-            wordlist_file = f.read()
+        f = request.FILES["file"]
+        wordlist_file = f.read()
 
-            Hashcat.upload_wordlist(params['name'], wordlist_file)
+        Hashcat.upload_wordlist(params['name'], wordlist_file)
     elif params['type'] == 'rule':
-            f = request.FILES["file"]
-            rule_file = f.read()
+        f = request.FILES["file"]
+        rule_file = f.read()
 
-            Hashcat.upload_rule(params['name'], rule_file)
+        Hashcat.upload_rule(params['name'], rule_file)
     elif params['type'] == 'mask':
-            f = request.FILES["file"]
-            mask_file = f.read()
+        f = request.FILES["file"]
+        mask_file = f.read()
 
-            Hashcat.upload_mask(params['name'], mask_file)
+        Hashcat.upload_mask(params['name'], mask_file)
 
     return HttpResponse(json.dumps({"result": "success"}), content_type="application/json")
+
+
+def _render_session_buttons(status: str, session_name: str) -> str:
+    if status == "Not started":
+        buttons = "<button title='Start session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (
+            session_name, "start")
+        buttons += "<button title='Remove session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (
+            session_name, "remove")
+    elif status == "Running":
+        buttons = "<button title='Pause session' type='button' class='btn btn-warning btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-pause'></span></button>" % (
+            session_name, "pause")
+        buttons += "<button title='Stop session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-stop'></span></button>" % (
+            session_name, "quit")
+    elif status == "Paused":
+        buttons = "<button title='Resume session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (
+            session_name, "resume")
+        buttons += "<button title='Stop session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-stop'></span></button>" % (
+            session_name, "quit")
+    else:
+        buttons = "<button title='Start session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (
+            session_name, "start")
+        buttons += "<button title='Remove session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (
+            session_name, "remove")
+    return "<div style='float: right'>%s</div>" % buttons

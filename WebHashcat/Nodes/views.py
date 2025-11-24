@@ -1,6 +1,7 @@
 from operator import itemgetter
 
-import requests
+from Utils.hashcat import Hashcat
+from Utils.hashcatAPI import HashcatAPI, HashcatAPIError
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
@@ -9,8 +10,6 @@ from django.shortcuts import redirect
 from django.template import loader
 
 from .models import Node
-from ..Utils.hashcat import Hashcat
-from ..Utils.hashcatAPI import HashcatAPI
 
 
 # Create your views here.
@@ -51,11 +50,11 @@ def node(request, node_name, error_msg=""):
     if request.method == 'POST':
         if request.POST["action"] == "synchronize":
 
-            hashcat_api = HashcatAPI(node_item.hostname, node_item.port, node_item.username, node_item.password)
-            node_data = hashcat_api.get_hashcat_info()
-
-            if not node_data:
-                return node(request, node_name, error_msg="Unable to fetch node information (no response)")
+            try:
+                hashcat_api = HashcatAPI(node_item.hostname, node_item.port, node_item.username, node_item.password)
+                node_data = hashcat_api.get_hashcat_info()
+            except HashcatAPIError as exc:
+                return node(request, node_name, error_msg=f"Unable to synchronize node: {exc}")
 
             if node_data.get("response") != "ok":
                 return node(request, node_name, error_msg=node_data.get("message", "Node returned an error"))
@@ -85,17 +84,11 @@ def node(request, node_name, error_msg=""):
     try:
         hashcat_api = HashcatAPI(node_item.hostname, node_item.port, node_item.username, node_item.password)
         node_data = hashcat_api.get_hashcat_info()
-
-        if not node_data:
-            return nodes(request,
-                         error_msg="Unable to connect to node %s at: %s:%d" % (node_item.name, node_item.hostname,
-                                                                               node_item.port))
-
         if node_data.get("response") == "error":
             return node(request, node_name, error_msg=node_data.get("message", "Unknown node error"))
-    except requests.exceptions.ConnectionError:
-        return nodes(request, error_msg="Unable to connect to node %s at: %s:%d" % (node_item.name, node_item.hostname,
-                                                                                    node_item.port))
+    except HashcatAPIError as exc:
+        return nodes(request,
+                     error_msg=f"Unable to connect to node {node_item.name} at: {node_item.hostname}:{node_item.port} ({exc})")
 
     rule_list = Hashcat.get_rules()
     mask_list = Hashcat.get_masks()

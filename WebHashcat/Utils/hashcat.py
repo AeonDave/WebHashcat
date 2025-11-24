@@ -1,45 +1,246 @@
 #!/usr/bin/python3
-import os
-import sys
-import re
-import time
-import string
-import random
-import subprocess
-import logging
 import configparser
-import threading
+import hashlib
+import logging
+import os
+import random
+import re
+import shlex
+import string
+import subprocess
 import tempfile
+import time
 import traceback
-import humanize
-from shutil import copyfile
-from os import listdir
-from os.path import isfile, join
 from hashlib import sha1
 from operator import itemgetter
-from django.db.utils import ProgrammingError
-from django.contrib import messages
-from django.db import transaction
+from os import listdir
+from os.path import isfile, join
+from shutil import copyfile
+from typing import Any, Dict, List, Optional, Union
+
+import humanize
 from django.db import connection
+from django.db import transaction
 from django.db.utils import OperationalError
 
+from Hashcat.models import Hash, Session, Hashfile
+from Utils import file_metadata
+from Utils.hashcatAPI import HashcatAPIError, HashcatAPI
 from Utils.models import Lock
-from Hashcat.models import Session, Hashfile, Hash
-from Utils.hashcatAPI import HashcatAPI
 from Utils.utils import del_hashfile_locks
+
+LOGGER = logging.getLogger(__name__)
+
+
+class HashcatExecutionError(RuntimeError):
+    """Raised when a hashcat subprocess fails."""
+
+    def __init__(self, cmd, returncode, stdout=None, stderr=None):
+        super().__init__(f"Hashcat command failed with exit code {returncode}: {shlex.join(cmd)}")
+        self.cmd = cmd
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
 
 class ClassProperty(property):
     def __get__(self, cls, owner):
         return self.fget.__get__(None, owner)()
+
+
+class PotfileManager:
+    """Helper to backup, restore and optimize the global potfile."""
+
+    def __init__(self, potfile_path: str, *, runner=None):
+        self.potfile_path = potfile_path
+        self.backup_path = potfile_path + ".bkp"
+        self._run_cmd = runner or Hashcat.run_hashcat
+
+    def _line_count(self, path: str) -> int:
+        if not os.path.exists(path):
+            return 0
+        return sum(1 for _ in open(path, errors="backslashreplace"))
+
+    def backup(self) -> Dict[str, int]:
+        current_count = self._line_count(self.potfile_path)
+        backup_count = self._line_count(self.backup_path)
+        if current_count > backup_count:
+            copyfile(self.potfile_path, self.backup_path)
+        elif current_count < backup_count:
+            LOGGER.error("Potfile appears to be corrupted")
+        return {"current": current_count, "backup": backup_count}
+
+    def restore_if_corrupt(self) -> bool:
+        current_count = self._line_count(self.potfile_path)
+        backup_count = self._line_count(self.backup_path)
+        if backup_count > current_count and backup_count > 0:
+            copyfile(self.backup_path, self.potfile_path)
+            return True
+        return False
+
+    def optimize(self) -> None:
+        self.backup()
+        optimized = False
+        while not optimized:
+            with transaction.atomic():
+                try:
+                    potfile_locks = list(Lock.objects.select_for_update().filter(lock_ressource="potfile"))
+
+                    try:
+                        sorted_unique = self._run_cmd(["sort", "-u", self.potfile_path]).stdout or ""
+                    except HashcatExecutionError as exc:
+                        LOGGER.error("Unable to optimize potfile with sort -u: %s", exc)
+                        raise
+
+                    tmp_file = tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8")
+                    try:
+                        tmp_file.write(sorted_unique)
+                        tmp_file.flush()
+                        tmp_file.close()
+                        os.replace(tmp_file.name, self.potfile_path)
+                    finally:
+                        try:
+                            os.unlink(tmp_file.name)
+                        except FileNotFoundError:
+                            pass
+
+                    del potfile_locks
+                    optimized = True
+                except OperationalError:
+                    pass
+
 
 class Hashcat(object):
     _hash_types = {}
     _version = None
 
     @classmethod
+    def run_hashcat(
+            cls,
+            cmd: List[str],
+            *,
+            check: bool = True,
+            capture_output: bool = True,
+            text: bool = True,
+            env: Optional[Dict[str, str]] = None,
+            cwd: Optional[str] = None,
+            input_data: Optional[Union[str, bytes]] = None,
+            timeout: Optional[float] = None,
+            stdout: Optional[int] = None,
+            stderr: Optional[int] = None,
+    ) -> subprocess.CompletedProcess:
+        if not cmd:
+            raise ValueError("Command list must not be empty")
+
+        binary_dir = os.path.dirname(cls.get_binary())
+        exec_cwd = cwd or binary_dir
+        log_cmd = shlex.join(cmd)
+        LOGGER.debug("Executing hashcat command: %s", log_cmd)
+
+        run_kwargs: Dict[str, Any] = {
+            "check": False,
+            "text": text,
+            "cwd": exec_cwd,
+            "env": env,
+            "input": input_data,
+            "timeout": timeout,
+        }
+        if capture_output:
+            run_kwargs["capture_output"] = True
+        else:
+            if stdout is not None:
+                run_kwargs["stdout"] = stdout
+            if stderr is not None:
+                run_kwargs["stderr"] = stderr
+
+        try:
+            completed = subprocess.run(cmd, **run_kwargs)
+        except OSError as exc:
+            LOGGER.exception("Failed to run hashcat command: %s", log_cmd)
+            raise HashcatExecutionError(cmd, -1, None, str(exc)) from exc
+
+        if check and completed.returncode != 0:
+            LOGGER.error(
+                "Hashcat command failed (%s): rc=%s stderr=%s",
+                log_cmd,
+                completed.returncode,
+                (completed.stderr or "").strip() if capture_output else None,
+            )
+            raise HashcatExecutionError(cmd, completed.returncode, completed.stdout, completed.stderr)
+
+        return completed
+
+    @classmethod
+    def _hashlisted_files(
+            cls,
+            base_dir: str,
+            suffix: str,
+            *,
+            detailed: bool,
+            include_lines: bool = False,
+    ):
+        os.makedirs(base_dir, exist_ok=True)
+        files = [
+            join(base_dir, f)
+            for f in listdir(base_dir)
+            if isfile(join(base_dir, f)) and f.endswith(suffix)
+        ]
+        if not detailed:
+            return [{"name": os.path.basename(f)} for f in files]
+
+        md5_map: Dict[str, str] = {}
+        if files:
+            try:
+                result = cls.run_hashcat(["md5sum", *files])
+                stdout = (result.stdout or "").strip().splitlines()
+                for line in stdout:
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        md5_map[os.path.basename(parts[-1])] = parts[0]
+            except HashcatExecutionError:
+                LOGGER.warning("md5sum failed for %s, falling back to hashlib", base_dir)
+
+        def _md5(path: str) -> Optional[str]:
+            if os.path.basename(path) in md5_map:
+                return md5_map[os.path.basename(path)]
+            if not os.path.exists(path):
+                return None
+            h = hashlib.md5()
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(8192), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+
+        entries = []
+        for file_path in files:
+            info = {
+                "name": os.path.basename(file_path),
+                "md5": _md5(file_path),
+                "path": file_path,
+            }
+            if include_lines:
+                meta = file_metadata.load_metadata().get(info["name"])
+                if meta and meta.get("md5") == info["md5"]:
+                    cached_lines = meta.get("lines")
+                    info["lines"] = humanize.intcomma(cached_lines) if isinstance(cached_lines, int) else cached_lines
+                else:
+                    try:
+                        line_count = sum(1 for _ in open(file_path, errors="backslashreplace"))
+                        info["lines"] = humanize.intcomma(line_count)
+                        file_metadata.update_entry(info["name"], info["md5"], line_count)
+                    except UnicodeDecodeError:
+                        LOGGER.warning("Unicode decode error in file %s", file_path)
+                        info["lines"] = "error"
+                    except Exception:
+                        LOGGER.exception("Failed to count lines for %s", file_path)
+                        info["lines"] = "error"
+            entries.append(info)
+        return sorted(entries, key=itemgetter('name'))
+
+    @classmethod
     def get_binary(self):
         config = configparser.ConfigParser()
-        utils_dir = os.path.dirname(os.path.abspath( __file__ ))
+        utils_dir = os.path.dirname(os.path.abspath(__file__))
         config.read(os.path.join(utils_dir, '..', 'settings.ini'))
 
         return config["Hashcat"]["binary"]
@@ -47,7 +248,7 @@ class Hashcat(object):
     @classmethod
     def get_potfile(self):
         config = configparser.ConfigParser()
-        utils_dir =  os.path.dirname(os.path.abspath( __file__ ))
+        utils_dir = os.path.dirname(os.path.abspath(__file__))
         config.read(os.path.join(utils_dir, '..', 'settings.ini'))
 
         return config["Hashcat"]["potfile"]
@@ -62,11 +263,12 @@ class Hashcat(object):
     """
         Parse hashcat version
     """
+
     @classmethod
     def parse_version(self):
 
-        hashcat_version = subprocess.Popen([self.get_binary(), '-V'] , stdout=subprocess.PIPE)
-        self._version = hashcat_version.communicate()[0].decode()
+        result = self.run_hashcat([self.get_binary(), '-V'])
+        self._version = (result.stdout or "").strip()
 
     @ClassProperty
     @classmethod
@@ -79,6 +281,7 @@ class Hashcat(object):
     """
         Parse hashcat help
     """
+
     @classmethod
     def parse_help(self):
 
@@ -86,10 +289,9 @@ class Hashcat(object):
         help_section_regex = re.compile("^- \[ (?P<section_name>.*) \] -$")
         hash_mode_regex = re.compile("^\s*(?P<id>\d+)\s+\|\s+(?P<name>.+)\s+\|\s+(?P<description>.+)\s*$")
 
-        hashcat_help = subprocess.Popen([self.get_binary(), '--help'], stdout=subprocess.PIPE)
-        for line in hashcat_help.stdout:
-            line = line.decode()
-            line = line.rstrip()
+        hashcat_help = self.run_hashcat([self.get_binary(), '--help'])
+        for raw_line in (hashcat_help.stdout or "").splitlines():
+            line = raw_line.rstrip()
 
             if len(line) == 0:
                 continue
@@ -120,7 +322,8 @@ class Hashcat(object):
                     # Lock: lock all the potfiles, this way only one instance of hashcat will be running at a time, the --left option eats a lot of RAM...
                     potfile_locks = list(Lock.objects.select_for_update().filter(lock_ressource="potfile"))
                     # Lock: prevent hashes file from being processed
-                    hashfile_lock = Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[0]
+                    hashfile_lock = \
+                        Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[0]
 
                     locked = True
                 except OperationalError as e:
@@ -138,27 +341,39 @@ class Hashcat(object):
         # is there a way to combine --show and --remove in hashcat ?
 
         # Get cracked hashes
-        cmd_line = [self.get_binary(), '--show', '-m', str(hashfile.hash_type), hashfile_path, '-o', cracked_file.name, '--session', session_name]
+        cmd_line = [self.get_binary(), '--show', '-m', str(hashfile.hash_type), hashfile_path, '-o', cracked_file.name,
+                    '--session', session_name]
         if hashcat_big_version >= 6:
             cmd_line += ['--outfile-format', '1,2']
         else:
             cmd_line += ['--outfile-format', '3']
         if potfile:
             cmd_line += ['--potfile-path', potfile]
-        print("%s: Command: %s" % (hashfile.name, " ".join(cmd_line)))
-        p = subprocess.Popen(cmd_line, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        p.wait()
+        LOGGER.info("%s: Command: %s", hashfile.name, " ".join(cmd_line))
+        self.run_hashcat(
+            cmd_line,
+            capture_output=False,
+            text=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
 
         # Remove cracked hashes from list
         f = tempfile.NamedTemporaryFile(delete=False)
         f.close()
-        cmd_line = [self.get_binary(), '--left', '-m', str(hashfile.hash_type), hashfile_path, '-o', f.name, '--session', session_name]
+        cmd_line = [self.get_binary(), '--left', '-m', str(hashfile.hash_type), hashfile_path, '-o', f.name,
+                    '--session', session_name]
         cmd_line += ['--outfile-format', '1']
         if potfile:
             cmd_line += ['--potfile-path', potfile]
-        print("%s: Command: %s" % (hashfile.name, " ".join(cmd_line)))
-        p = subprocess.Popen(cmd_line, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        p.wait()
+        LOGGER.info("%s: Command: %s", hashfile.name, " ".join(cmd_line))
+        self.run_hashcat(
+            cmd_line,
+            capture_output=False,
+            text=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
 
         copyfile(f.name, hashfile_path)
         os.remove(f.name)
@@ -171,11 +386,13 @@ class Hashcat(object):
             start = time.perf_counter()
 
             cursor = connection.cursor()
-            tmp_table_name = "tmp_table_%s" % ''.join(random.choice(string.ascii_lowercase+string.digits) for i in range(10))
+            tmp_table_name = "tmp_table_%s" % ''.join(
+                random.choice(string.ascii_lowercase + string.digits) for i in range(10))
             try:
                 # create temporary table
                 cursor.execute("BEGIN;")
-                cursor.execute("CREATE TEMPORARY TABLE " + tmp_table_name + " (hash_hash varchar(190) PRIMARY KEY, hash LONGTEXT, password varchar(190) NOT NULL, pass_len INTEGER, pass_charset varchar(190), pass_mask varchar(190));")
+                cursor.execute(
+                    "CREATE TEMPORARY TABLE " + tmp_table_name + " (hash_hash varchar(190) PRIMARY KEY, hash LONGTEXT, password varchar(190) NOT NULL, pass_len INTEGER, pass_charset varchar(190), pass_mask varchar(190));")
                 cursor.execute("SET unique_checks=0;")
 
                 bulk_insert_list = []
@@ -192,23 +409,29 @@ class Hashcat(object):
                     nb_insert += 1
 
                     if nb_insert >= 1000:
-                        cursor.execute("INSERT INTO " + tmp_table_name + " VALUES " + ", ".join(["(%s, %s, %s, %s, %s, %s)"]*nb_insert) + ";", bulk_insert_list)
+                        cursor.execute("INSERT INTO " + tmp_table_name + " VALUES " + ", ".join(
+                            ["(%s, %s, %s, %s, %s, %s)"] * nb_insert) + ";", bulk_insert_list)
                         bulk_insert_list = []
                         nb_insert = 0
 
                     # insert into table every 100K rows will prevent MySQL from raising "The number of locks exceeds the lock table size"
                     if index % 100000 == 0:
-                        cursor.execute("UPDATE " + tmp_table_name + " b JOIN Hashcat_hash a ON a.hash_hash = b.hash_hash AND a.hash_type=%s SET a.password = b.password, a.password_len = b.pass_len, a.password_charset = b.pass_charset, a.password_mask = b.pass_mask;", [hashfile.hash_type])
+                        cursor.execute(
+                            "UPDATE " + tmp_table_name + " b JOIN Hashcat_hash a ON a.hash_hash = b.hash_hash AND a.hash_type=%s SET a.password = b.password, a.password_len = b.pass_len, a.password_charset = b.pass_charset, a.password_mask = b.pass_mask;",
+                            [hashfile.hash_type])
                         cursor.execute("DELETE FROM " + tmp_table_name + ";")
                         cursor.execute("COMMIT;")
 
                 if len(bulk_insert_list) != 0:
-                    cursor.execute("INSERT INTO " + tmp_table_name + " VALUES " + ", ".join(["(%s, %s, %s, %s, %s, %s)"]*nb_insert) + ";", bulk_insert_list)
+                    cursor.execute("INSERT INTO " + tmp_table_name + " VALUES " + ", ".join(
+                        ["(%s, %s, %s, %s, %s, %s)"] * nb_insert) + ";", bulk_insert_list)
 
-                cursor.execute("UPDATE " + tmp_table_name + " b JOIN Hashcat_hash a ON a.hash_hash = b.hash_hash AND a.hash_type=%s SET a.password = b.password, a.password_len = b.pass_len, a.password_charset = b.pass_charset, a.password_mask = b.pass_mask;", [hashfile.hash_type])
+                cursor.execute(
+                    "UPDATE " + tmp_table_name + " b JOIN Hashcat_hash a ON a.hash_hash = b.hash_hash AND a.hash_type=%s SET a.password = b.password, a.password_len = b.pass_len, a.password_charset = b.pass_charset, a.password_mask = b.pass_mask;",
+                    [hashfile.hash_type])
                 cursor.execute("COMMIT;")
-            except Exception as e:
-                traceback.print_exc()
+            except Exception:
+                LOGGER.exception("Failed to update cracked passwords for %s", hashfile.name)
             finally:
                 cursor.execute("SET unique_checks=1;")
                 cursor.execute("DROP TABLE %s;" % tmp_table_name)
@@ -219,7 +442,7 @@ class Hashcat(object):
                 hashfile.save()
 
             end = time.perf_counter()
-            print("Update password time: %fs" % (end-start,))
+            LOGGER.info("Updated passwords in %.2fs", end - start)
 
             os.remove(cracked_file.name)
 
@@ -232,7 +455,8 @@ class Hashcat(object):
             while not locked:
                 try:
                     # Lock: prevent cracked file from being processed
-                    hashfile_lock = Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[0]
+                    hashfile_lock = \
+                        Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[0]
 
                     locked = True
                 except OperationalError as e:
@@ -240,7 +464,6 @@ class Hashcat(object):
 
         hashfile_path = os.path.join(os.path.dirname(__file__), "..", "Files", "Hashfiles", hashfile.hashfile)
         if os.path.exists(hashfile_path):
-
 
             try:
                 # 0 - Hashcat can change the hash output (upper/lower chars), lets pass them through hashcat first
@@ -253,9 +476,14 @@ class Hashcat(object):
                 if hashfile.username_included:
                     cmd_line += ['--username']
 
-                print("%s: Command: %s" % (hashfile.name, " ".join(cmd_line)))
-                p = subprocess.Popen(cmd_line, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-                p.wait()
+                LOGGER.info("%s: Command: %s", hashfile.name, " ".join(map(str, cmd_line)))
+                self.run_hashcat(
+                    cmd_line,
+                    capture_output=False,
+                    text=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT,
+                )
 
                 # 1 - import hashfile to database
 
@@ -282,15 +510,15 @@ class Hashcat(object):
                     password_hash_hash = sha1(password_hash.encode()).hexdigest()
 
                     h = Hash(
-                            hashfile=hashfile,
-                            hash_type=hashfile.hash_type,
-                            username=username,
-                            hash=password_hash,
-                            hash_hash=password_hash_hash,
-                            password=None,
-                            password_len=None,
-                            password_charset=None,
-                            password_mask=None,
+                        hashfile=hashfile,
+                        hash_type=hashfile.hash_type,
+                        username=username,
+                        hash=password_hash,
+                        hash_hash=password_hash_hash,
+                        password=None,
+                        password_len=None,
+                        password_charset=None,
+                        password_mask=None,
                     )
                     batch_create_list.append(h)
 
@@ -310,7 +538,7 @@ class Hashcat(object):
                 hashfile.save()
 
                 end = time.perf_counter()
-                print("Inserted hashes in : %fs" % (end-start,))
+                LOGGER.info("Inserted hashes in %.2fs", end - start)
 
                 # 2 - if username in hashfile, delete file and create one with only the hashes, 
                 #     --username takes a lot of RAM with hashcat, this method is better when processing huge hashfiles
@@ -326,7 +554,7 @@ class Hashcat(object):
                     f = open(tmpfile_path, "w")
 
                     cursor = connection.cursor()
-                    #cursor.execute("SELECT DISTINCT hash FROM Hashcat_hash WHERE hashfile_id=%s INTO OUTFILE %s", [hashfile.id, tmpfile_path])
+                    # cursor.execute("SELECT DISTINCT hash FROM Hashcat_hash WHERE hashfile_id=%s INTO OUTFILE %s", [hashfile.id, tmpfile_path])
                     cursor.execute("SELECT DISTINCT hash FROM Hashcat_hash WHERE hashfile_id=%s", [hashfile.id])
                     for row in cursor.fetchall():
                         f.write("%s\n" % row[0])
@@ -338,12 +566,12 @@ class Hashcat(object):
                     os.remove(tmpfile_path)
 
                 end = time.perf_counter()
-                print("Wrote hashfile on disk in : %fs" % (end-start,))
+                LOGGER.info("Wrote hashfile on disk in %.2fs", end - start)
 
-            except Exception as e:
-                traceback.print_exc()
+            except Exception:
+                LOGGER.exception("Failed to insert hashes for %s", hashfile.name)
         else:
-            print("Error: hashfile doesn't exists")
+            LOGGER.error("Hashfile %s does not exist on disk", hashfile.hashfile)
 
         # Crackedfile processing if over, remove lock
         del hashfile_lock
@@ -357,7 +585,8 @@ class Hashcat(object):
             while not locked:
                 try:
                     # Lock: prevent cracked file from being processed
-                    hashfile_lock = Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[0]
+                    hashfile_lock = \
+                        Lock.objects.select_for_update().filter(hashfile_id=hashfile.id, lock_ressource="hashfile")[0]
 
                     locked = True
                 except OperationalError as e:
@@ -383,14 +612,14 @@ class Hashcat(object):
                     pass_len, pass_charset, _, pass_mask, _ = analyze_password(password)
 
                     h = Hash(
-                            hashfile=hashfile,
-                            hash_type=hashfile.hash_type,
-                            username=username,
-                            password=password,
-                            hash=password_hash,
-                            password_len=pass_len,
-                            password_charset=pass_charset,
-                            password_mask=pass_mask,
+                        hashfile=hashfile,
+                        hash_type=hashfile.hash_type,
+                        username=username,
+                        password=password,
+                        hash=password_hash,
+                        password_len=pass_len,
+                        password_charset=pass_charset,
+                        password_mask=pass_mask,
                     )
                     batch_create_list.append(h)
 
@@ -418,80 +647,20 @@ class Hashcat(object):
     @classmethod
     def get_rules(self, detailed=True):
 
-        res = []
-        if not detailed:
-            path = os.path.join(os.path.dirname(__file__), "..", "Files", "Rulefiles")
-            res = [{"name": f} for f in listdir(path) if isfile(join(path, f)) and f.endswith(".rule")]
-        else:
-            path = os.path.join(os.path.dirname(__file__), "..", "Files", "Rulefiles", "*")
-            # use md5sum instead of python code for performance issues on a big file
-            result = subprocess.run('md5sum %s' % path, shell=True, stdout=subprocess.PIPE).stdout.decode()
-
-            for line in result.split("\n"):
-                items = line.split()
-                if len(items) == 2:
-                    res.append({
-                        "name": items[1].split("/")[-1],
-                        "md5": items[0],
-                        "path": items[1],
-                        })
-
-        return sorted(res, key=itemgetter('name'))
+        base_dir = os.path.join(os.path.dirname(__file__), "..", "Files", "Rulefiles")
+        return self._hashlisted_files(base_dir, ".rule", detailed=detailed)
 
     @classmethod
     def get_masks(self, detailed=True):
 
-        res = []
-        if not detailed:
-            path = os.path.join(os.path.dirname(__file__), "..", "Files", "Maskfiles")
-            res = [{"name": f} for f in listdir(path) if isfile(join(path, f)) and f.endswith(".hcmask")]
-        else:
-            path = os.path.join(os.path.dirname(__file__), "..", "Files", "Maskfiles", "*")
-            # use md5sum instead of python code for performance issues on a big file
-            result = subprocess.run('md5sum %s' % path, shell=True, stdout=subprocess.PIPE).stdout.decode()
-
-            for line in result.split("\n"):
-                items = line.split()
-                if len(items) == 2:
-                    res.append({
-                        "name": items[1].split("/")[-1],
-                        "md5": items[0],
-                        "path": items[1],
-                        })
-
-        return sorted(res, key=itemgetter('name'))
+        base_dir = os.path.join(os.path.dirname(__file__), "..", "Files", "Maskfiles")
+        return self._hashlisted_files(base_dir, ".hcmask", detailed=detailed)
 
     @classmethod
     def get_wordlists(self, detailed=True):
 
-        res = []
-        if not detailed:
-            path = os.path.join(os.path.dirname(__file__), "..", "Files", "Wordlistfiles")
-
-            res = [{"name": f} for f in listdir(path) if isfile(join(path, f)) and f.endswith(".wordlist")]
-        else:
-            path = os.path.join(os.path.dirname(__file__), "..", "Files", "Wordlistfiles", "*")
-            # use md5sum instead of python code for performance issues on a big file
-            result = subprocess.run('md5sum %s' % path, shell=True, stdout=subprocess.PIPE).stdout.decode()
-
-            for line in result.split("\n"):
-                items = line.split()
-                if len(items) == 2:
-                    info = {
-                        "name": items[1].split("/")[-1],
-                        "md5": items[0],
-                        "path": items[1],
-                    }
-
-                    try:
-                        info["lines"] = humanize.intcomma(sum(1 for _ in open(items[1], errors="backslashreplace")))
-                    except UnicodeDecodeError:
-                        print("Unicode decode error in file %s" % items[1])
-                        info["lines"] = "error"
-                    res.append(info)
-
-
-        return sorted(res, key=itemgetter('name'))
+        base_dir = os.path.join(os.path.dirname(__file__), "..", "Files", "Wordlistfiles")
+        return self._hashlisted_files(base_dir, ".wordlist", detailed=detailed, include_lines=True)
 
     @classmethod
     def upload_rule(self, name, file):
@@ -517,14 +686,36 @@ class Hashcat(object):
 
     @classmethod
     def upload_wordlist(self, name, file):
-        if not name.endswith(".wordlist"):
-            name = "%s.wordlist" % name
         name = name.replace(" ", "_")
+        original = name
+        base = name
+        ext = ""
+        if name.endswith(".tar.gz"):
+            base = name[:-7]
+            ext = ".tar.gz"
+        elif name.endswith(".gz"):
+            base = name[:-3]
+            ext = ".gz"
+        elif name.endswith(".zip"):
+            base = name[:-4]
+            ext = ".zip"
+
+        if not base.endswith(".wordlist"):
+            base = f"{base}.wordlist"
+
+        name = base + ext
 
         path = os.path.join(os.path.dirname(__file__), "..", "Files", "Wordlistfiles", name)
 
         with open(path, "wb") as f:
             f.write(file)
+
+        if ext == "":
+            try:
+                line_count = sum(1 for _ in open(path, errors="backslashreplace"))
+                file_metadata.update_entry(name, "", line_count)
+            except Exception:
+                LOGGER.warning("Unable to precompute line count for %s", name)
 
     @classmethod
     def remove_rule(self, name):
@@ -559,10 +750,13 @@ class Hashcat(object):
     @classmethod
     def update_hashfiles(self):
 
-        self.backup_potfile()
+        pot_manager = PotfileManager(self.get_potfile())
+        pot_manager.backup()
 
         updated_hashfile_ids = self.update_potfile()
-        print(updated_hashfile_ids)
+        LOGGER.debug("Updated hashfile ids: %s", updated_hashfile_ids)
+
+        pot_manager.restore_if_corrupt()
 
         for hashfile_id in updated_hashfile_ids:
             hashfile = Hashfile.objects.get(id=hashfile_id)
@@ -580,7 +774,7 @@ class Hashcat(object):
         with transaction.atomic():
             try:
                 # Lock: prevent the potfile from being modified
-                potfile_locks = list(Lock.objects.select_for_update().filter(lock_ressource="potfile"))
+                list(Lock.objects.select_for_update().filter(lock_ressource="potfile"))
 
                 # update the potfile
                 for session in Session.objects.all():
@@ -590,9 +784,10 @@ class Hashcat(object):
                         hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
 
                         remaining = True
-                        while(remaining):
+                        while (remaining):
                             potfile_data = hashcat_api.get_potfile(session.name, session.potfile_line_retrieved)
-                            if potfile_data != None and potfile_data["response"] == "ok" and potfile_data["line_count"] > 0:
+                            if potfile_data != None and potfile_data["response"] == "ok" and potfile_data[
+                                "line_count"] > 0:
                                 f = open(self.get_potfile(), "a", encoding='utf-8')
                                 f.write(potfile_data["potfile_data"])
                                 f.close()
@@ -606,60 +801,24 @@ class Hashcat(object):
                             else:
                                 remaining = False
 
+                    except HashcatAPIError as exc:
+                        LOGGER.warning("Unable to update potfile for session %s: %s", session.name, exc)
                     except ConnectionRefusedError:
-                        pass
-
-                del potfile_locks
+                        LOGGER.warning("Connection refused when updating potfile for session %s", session.name)
             except OperationalError as e:
                 # potfile is locked, no need to be concerned about it, this function is executed regularly
-                print("Error: potfile locked")
+                LOGGER.error("Potfile locked while updating cracked counts")
 
         return list(set(updated_hashfile_ids))
 
     @classmethod
     def optimize_potfile(self):
 
-        self.backup_potfile()
-
-        optimized = False
-        while not optimized:
-            with transaction.atomic():
-                try:
-                    # Lock: prevent the potfile from being modified
-                    potfile_locks = list(Lock.objects.select_for_update().filter(lock_ressource="potfile"))
-
-                    # Probably quicker than a python equivalent code
-                    tmp_potfile = "/tmp/webhashcat_potfile"
-                    os.system("sort %s | uniq > %s; mv %s %s" % (Hashcat.get_potfile(), tmp_potfile, tmp_potfile, Hashcat.get_potfile()))
-
-                    del potfile_locks
-
-                    optimized = True
-
-                except OperationalError as e:
-                    pass
-
+        PotfileManager(Hashcat.get_potfile()).optimize()
 
     @classmethod
     def backup_potfile(self):
-        potfile_path = self.get_potfile()
-        potfile_backup_path = potfile_path + ".bkp"
-
-        if os.path.exists(potfile_path):
-            potfile_line_count = sum(1 for _ in open(potfile_path, errors="backslashreplace"))
-        else:
-            potfile_line_count = 0
-
-        if os.path.exists(potfile_backup_path):
-            potfile_backup_line_count = sum(1 for _ in open(potfile_backup_path, errors="backslashreplace"))
-        else:
-            potfile_backup_line_count = 0
-
-        if potfile_line_count > potfile_backup_line_count:
-            copyfile(potfile_path, potfile_backup_path)
-        elif potfile_line_count < potfile_backup_line_count:
-            # It can happen when the RAW is full, hashcat fails and the potfile might get corrupted
-            print("ERROR: potfile corrupted !!!!")
+        PotfileManager(self.get_potfile()).backup()
 
     @classmethod
     def remove_hashfile(self, hashfile):
@@ -691,15 +850,15 @@ class Hashcat(object):
         cursor.close()
         hashfile.delete()
         end = time.perf_counter()
-        print(">>> Hashfile %s deleted from database in %fs" % (hashfile.name, end-start))
+        LOGGER.info("Hashfile %s deleted from database in %.2fs", hashfile.name, end - start)
+
 
 # This function is taken from https://github.com/iphelix/pack
 
 def analyze_password(password):
-
     # Password length
     if password.startswith("$HEX["):
-        pass_length = (len(password)-6)/2
+        pass_length = (len(password) - 6) / 2
         return (pass_length, "unknown", None, None, None)
     else:
         pass_length = len(password)
@@ -737,33 +896,44 @@ def analyze_password(password):
             advancedmask_string += "?s"
             if not simplemask or not simplemask[-1] == 'special': simplemask.append('special')
 
-
     # String representation of masks
     simplemask_string = ''.join(simplemask) if len(simplemask) <= 3 else 'othermask'
 
     # Policy
-    policy = (digit,lower,upper,special)
+    policy = (digit, lower, upper, special)
 
     # Determine character-set
-    if   digit and not lower and not upper and not special: charset = 'numeric'
-    elif not digit and lower and not upper and not special: charset = 'loweralpha'
-    elif not digit and not lower and upper and not special: charset = 'upperalpha'
-    elif not digit and not lower and not upper and special: charset = 'special'
+    if digit and not lower and not upper and not special:
+        charset = 'numeric'
+    elif not digit and lower and not upper and not special:
+        charset = 'loweralpha'
+    elif not digit and not lower and upper and not special:
+        charset = 'upperalpha'
+    elif not digit and not lower and not upper and special:
+        charset = 'special'
 
-    elif not digit and lower and upper and not special:     charset = 'mixedalpha'
-    elif digit and lower and not upper and not special:     charset = 'loweralphanum'
-    elif digit and not lower and upper and not special:     charset = 'upperalphanum'
-    elif not digit and lower and not upper and special:     charset = 'loweralphaspecial'
-    elif not digit and not lower and upper and special:     charset = 'upperalphaspecial'
-    elif digit and not lower and not upper and special:     charset = 'specialnum'
+    elif not digit and lower and upper and not special:
+        charset = 'mixedalpha'
+    elif digit and lower and not upper and not special:
+        charset = 'loweralphanum'
+    elif digit and not lower and upper and not special:
+        charset = 'upperalphanum'
+    elif not digit and lower and not upper and special:
+        charset = 'loweralphaspecial'
+    elif not digit and not lower and upper and special:
+        charset = 'upperalphaspecial'
+    elif digit and not lower and not upper and special:
+        charset = 'specialnum'
 
-    elif not digit and lower and upper and special:         charset = 'mixedalphaspecial'
-    elif digit and not lower and upper and special:         charset = 'upperalphaspecialnum'
-    elif digit and lower and not upper and special:         charset = 'loweralphaspecialnum'
-    elif digit and lower and upper and not special:         charset = 'mixedalphanum'
-    else:                                                   charset = 'all'
+    elif not digit and lower and upper and special:
+        charset = 'mixedalphaspecial'
+    elif digit and not lower and upper and special:
+        charset = 'upperalphaspecialnum'
+    elif digit and lower and not upper and special:
+        charset = 'loweralphaspecialnum'
+    elif digit and lower and upper and not special:
+        charset = 'mixedalphanum'
+    else:
+        charset = 'all'
 
     return (pass_length, charset, simplemask_string, advancedmask_string, policy)
-
-
-

@@ -1,6 +1,6 @@
 # WebHashcat
 
-Modern Hashcat orchestration with a Django web UI, Celery workers, and Docker-first workflows.
+Hashcat orchestration with a Django web UI, Celery workers, and Docker-first workflows.
 
 > This fork tracks the original project from https://github.com/hegusung/WebHashcat and keeps it current with Python 3.11, docker compose profiles, and hashcat 7.1.2 (CPU and CUDA).
 
@@ -56,7 +56,17 @@ docker compose up -d --build
 - Starts MySQL, Redis, the Django web container, and the Celery worker. Files under `WebHashcat/Files` are bind-mounted.
 - The UI listens on `http://127.0.0.1:8000` (credentials come from `variables.env`).
 
-### 2. Start one or more nodes
+### 2. Prepare node config and secrets
+
+HashcatNode reads static settings (paths, bind, workload) from `HashcatNode/settings.ini` (auto-copied from the sample in Docker) and credentials from files or env vars:
+
+- Preferred: write username/password to `HashcatNode/secrets/hashcatnode_username` and `HashcatNode/secrets/hashcatnode_password` (mounted into the container at `/run/secrets/...` by default). You can rotate them with `python manage.py rotate_node_passwords` in the Django app and refresh the files accordingly.
+- Optional: set `HASHCATNODE_USERNAME` / `HASHCATNODE_PASSWORD` or `HASHCATNODE_HASH` env vars; these override `settings.ini`. Avoid storing passwords in `settings.ini` when secrets/env are available.
+- Paths (`HASHCATNODE_HASHES_DIR`, `..._RULES_DIR`, etc.) default to the Docker volume mounts; adjust via env if you change the volume layout.
+- The node’s SQLite database is stored in a Docker named volume (`hashcatnode-db`) mounted at `/hashcatnode/data`, driven by `HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db`. No manual file creation is needed.
+- Hashcat 7.1.x supports compressed wordlists on-the-fly (`.gz`, `.zip`, `.tar.gz`), so you can upload and keep wordlists in these formats; they are stored as-is and used directly by hashcat.
+
+### 3. Start one or more nodes
 
 ```
 cd HashcatNode/
@@ -73,9 +83,10 @@ HASHCAT_VERSION=v7.1.3 docker compose --profile cuda up -d --build
 
 - Both `hashcatnode-cuda` and `hashcatnode-cpu` automatically attach to `webhashcat-net`.
 - CUDA profile expects `nvidia-container-toolkit`; CPU profile works everywhere.
-- Override the Basic-Auth credentials via `HASHCATNODE_USERNAME` and `HASHCATNODE_HASH` (sha256 of the password).
+- Override the Basic-Auth credentials by editing the secret files described above or by providing `HASHCATNODE_USERNAME[_FILE]` / `HASHCATNODE_PASSWORD[_FILE]` / `HASHCATNODE_HASH[_FILE]` env vars.
+- TLS material is generated on first boot inside `/hashcatnode/certs`. Mount your own cert/key pair and set `HASHCATNODE_CERT_PATH` / `HASHCATNODE_KEY_PATH` if you want trusted certificates.
 
-### 3. Register and synchronise a node
+### 4. Register and synchronise a node
 
 1. Open `http://127.0.0.1:8000` and go to **Nodes**.
 2. Create a node with hostname `hashcatnode-cpu` (or `hashcatnode-cuda`), port `9999`, and the credentials configured above.
@@ -83,7 +94,7 @@ HASHCAT_VERSION=v7.1.3 docker compose --profile cuda up -d --build
 
 Tip: Nodes on other machines do not need the shared Docker network. Just publish port 9999 on the host and register the node with that host/IP in the Web UI.
 
-### 4. Upload assets and launch sessions
+### 5. Upload assets and launch sessions
 
 - Use **Hashcat → Files** to upload hashfiles, wordlists, masks, and rules. Uploaded files stay under `WebHashcat/Files/**` until removed.
 - From **Hashcat → Hashfiles**, click **Add** to import a new hashfile. Use the `+` button beside a hashfile to define a cracking session, then hit **Play** to start it.
@@ -100,10 +111,21 @@ Screenshots:
 ## Managing nodes and assets
 
 - Rules, masks, and wordlists can be uploaded through the UI or via `Utils/upload_file.py`. Synchronise a node to push updated versions (MD5 checks prevent redundant uploads).
+- Rotate node credentials with `python manage.py rotate_node_passwords [--node-name NODE]` to generate new passwords, then copy the reported username/password/hash into the node’s secret files or secret store.
 - Hash types are now parsed from `hashcat -hh`, so new hashcat releases only require rebuilding the node container with a newer `HASHCAT_VERSION`.
 - Each cracking session stores its own potfile and optional debug output under `HashcatNode/potfiles` and `HashcatNode/outputs`. Start, pause, resume, and quit actions can be issued from the Web UI.
 - Windows nodes still allow only one running session at a time (hashcat limitation).
 - The **Searches** page lets you query usernames or email fragments across every imported hashfile and download the results.
+
+### Node telemetry cache
+
+- Celery now polls every registered node on a short interval (`HASHCAT_CACHE_REFRESH_SECONDS`, default 30s) and writes node/session snapshots into Redis.
+- All dashboard/API endpoints use the cached view instead of calling each node synchronously, so UI refreshes stay non-blocking.
+- Cache metadata (`available`, `age_seconds`, `is_stale`) is returned with each response and rendered beside the affected tables.
+- Tune the cache via environment variables:
+   - `HASHCAT_CACHE_REDIS_URL`: Redis connection used for snapshots (defaults to `redis://redis:6379/1`).
+   - `HASHCAT_CACHE_TTL_SECONDS`: expiration for stored snapshots (defaults to 300 seconds).
+   - `HASHCAT_CACHE_STALE_SECONDS`: threshold that marks data as stale in the UI (defaults to 90 seconds).
 
 ## Manual installation
 
@@ -120,6 +142,7 @@ Docker is strongly recommended, but bare-metal steps remain for completeness.
 3. Initialise local resources:
    ```
    python3 create_database.py
+   # Optionally generate TLS material or point HASHCATNODE_CERT_PATH/HASHCATNODE_KEY_PATH to existing files
    openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes
    ```
 4. Start the node with `python3 hashcatnode.py`. Use `systemd/hashcatnode.service` on Linux or Task Scheduler/Services on Windows to keep it running.
