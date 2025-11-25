@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import configparser
 import hashlib
+import io
 import logging
 import os
 import random
@@ -16,7 +17,7 @@ from operator import itemgetter
 from os import listdir
 from os.path import isfile, join
 from shutil import copyfile
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import humanize
 from django.db import connection
@@ -174,10 +175,14 @@ class Hashcat(object):
     def _hashlisted_files(
             cls,
             base_dir: str,
-            suffix: str,
+            suffix,
             *,
             detailed: bool,
             include_lines: bool = False,
+            use_metadata: bool = True,
+            line_counter: Optional[Callable[[str], Optional[int]]] = None,
+            category: str = "wordlists",
+            compute_md5: bool = False,
     ):
         os.makedirs(base_dir, exist_ok=True)
         files = [
@@ -188,53 +193,65 @@ class Hashcat(object):
         if not detailed:
             return [{"name": os.path.basename(f)} for f in files]
 
-        md5_map: Dict[str, str] = {}
-        if files:
-            try:
-                result = cls.run_hashcat(["md5sum", *files])
-                stdout = (result.stdout or "").strip().splitlines()
-                for line in stdout:
-                    parts = line.strip().split()
-                    if len(parts) >= 2:
-                        md5_map[os.path.basename(parts[-1])] = parts[0]
-            except HashcatExecutionError:
-                LOGGER.warning("md5sum failed for %s, falling back to hashlib", base_dir)
-
-        def _md5(path: str) -> Optional[str]:
-            if os.path.basename(path) in md5_map:
-                return md5_map[os.path.basename(path)]
-            if not os.path.exists(path):
-                return None
-            h = hashlib.md5()
-            with open(path, "rb") as fh:
-                for chunk in iter(lambda: fh.read(8192), b""):
-                    h.update(chunk)
-            return h.hexdigest()
+        meta_cache: Dict[str, Dict[str, Optional[int]]] = file_metadata.load_metadata(category) if use_metadata else {}
+        valid_files = set()
+        meta_changed = False
 
         entries = []
         for file_path in files:
+            fname = os.path.basename(file_path)
+            cached_entry = meta_cache.get(fname) if use_metadata else None
             info = {
-                "name": os.path.basename(file_path),
-                "md5": _md5(file_path),
+                "name": fname,
+                "md5": cached_entry.get("md5") if cached_entry else None,
                 "path": file_path,
             }
+            if (info["md5"] is None or info["md5"] == "") and compute_md5:
+                try:
+                    h = hashlib.md5()
+                    with open(file_path, "rb") as fh:
+                        for chunk in iter(lambda: fh.read(8192), b""):
+                            h.update(chunk)
+                    info["md5"] = h.hexdigest()
+                except Exception:
+                    LOGGER.warning("Failed to compute md5 for %s", file_path, exc_info=True)
+            valid_files.add(info["name"])
             if include_lines:
-                meta = file_metadata.load_metadata().get(info["name"])
-                if meta and meta.get("md5") == info["md5"]:
-                    cached_lines = meta.get("lines")
-                    info["lines"] = humanize.intcomma(cached_lines) if isinstance(cached_lines, int) else cached_lines
+                cached_lines = cached_entry.get("lines") if cached_entry else None
+                line_count: Optional[int] = None
+
+                if cached_entry and cached_lines is not None:
+                    line_count = cached_lines if isinstance(cached_lines, int) else None
                 else:
                     try:
-                        line_count = sum(1 for _ in open(file_path, errors="backslashreplace"))
-                        info["lines"] = humanize.intcomma(line_count)
-                        file_metadata.update_entry(info["name"], info["md5"], line_count)
+                        if line_counter:
+                            line_count = line_counter(file_path)
+                        else:
+                            line_count = sum(1 for _ in open(file_path, errors="backslashreplace"))
                     except UnicodeDecodeError:
                         LOGGER.warning("Unicode decode error in file %s", file_path)
-                        info["lines"] = "error"
                     except Exception:
                         LOGGER.exception("Failed to count lines for %s", file_path)
-                        info["lines"] = "error"
+
+                if line_count is not None:
+                    info["lines"] = humanize.intcomma(line_count)
+                else:
+                    info["lines"] = "unknown"
+
+                if use_metadata and (cached_entry is None or cached_entry.get("md5") != info["md5"] or cached_lines != line_count):
+                    meta_cache[info["name"]] = {"md5": info["md5"], "lines": line_count}
+                    meta_changed = True
             entries.append(info)
+
+        # Prune metadata entries for files that no longer exist
+        if include_lines and use_metadata:
+            missing = [k for k in meta_cache.keys() if k not in valid_files]
+            if missing:
+                for key in missing:
+                    del meta_cache[key]
+                meta_changed = True
+            if meta_changed:
+                file_metadata.save_metadata(category, meta_cache)
         return sorted(entries, key=itemgetter('name'))
 
     @classmethod
@@ -648,19 +665,95 @@ class Hashcat(object):
     def get_rules(self, detailed=True):
 
         base_dir = os.path.join(os.path.dirname(__file__), "..", "Files", "Rulefiles")
-        return self._hashlisted_files(base_dir, ".rule", detailed=detailed)
+        def _rule_lines(path: str) -> Optional[int]:
+            try:
+                with open(path, errors="backslashreplace") as fh:
+                    return sum(1 for line in fh if line.strip() and not line.lstrip().startswith("#"))
+            except Exception:
+                LOGGER.warning("Failed to count rule lines for %s", path, exc_info=True)
+                return None
+
+        return self._hashlisted_files(
+            base_dir,
+            ".rule",
+            detailed=detailed,
+            include_lines=detailed,
+            use_metadata=True,
+            line_counter=_rule_lines,
+            category="rules",
+            compute_md5=True,
+        )
 
     @classmethod
     def get_masks(self, detailed=True):
 
         base_dir = os.path.join(os.path.dirname(__file__), "..", "Files", "Maskfiles")
-        return self._hashlisted_files(base_dir, ".hcmask", detailed=detailed)
+        return self._hashlisted_files(
+            base_dir,
+            ".hcmask",
+            detailed=detailed,
+            include_lines=detailed,
+            use_metadata=True,
+            category="masks",
+            compute_md5=True,
+        )
 
     @classmethod
     def get_wordlists(self, detailed=True):
 
         base_dir = os.path.join(os.path.dirname(__file__), "..", "Files", "Wordlistfiles")
-        return self._hashlisted_files(base_dir, ".wordlist", detailed=detailed, include_lines=True)
+        suffixes = (
+            ".wordlist",
+            ".wordlist.gz",
+            ".wordlist.zip",
+            ".txt",
+            ".list",
+            ".txt.gz",
+            ".list.gz",
+            ".txt.zip",
+            ".list.zip",
+        )
+        return self._hashlisted_files(
+            base_dir,
+            suffixes,
+            detailed=detailed,
+            include_lines=True,
+            use_metadata=True,
+            category="wordlists",
+            compute_md5=True,
+            line_counter=self._count_wordlist_lines,
+        )
+
+    @classmethod
+    def _count_wordlist_lines(cls, path: str) -> Optional[int]:
+        try:
+            # Prefer hashcat --keyspace: handles compressed archives transparently
+            try:
+                result = cls.run_hashcat([cls.get_binary(), "--keyspace", path], capture_output=True, text=True, check=True)
+                if result.stdout:
+                    return int(result.stdout.strip())
+            except Exception:
+                LOGGER.debug("hashcat --keyspace failed for %s, falling back to manual count", path, exc_info=True)
+
+            if path.endswith(".gz"):
+                import gzip
+                with gzip.open(path, "rt", errors="backslashreplace") as fh:
+                    return sum(1 for _ in fh)
+            if path.endswith(".zip"):
+                import zipfile
+                with zipfile.ZipFile(path) as zf:
+                    for member in zf.infolist():
+                        if member.is_dir():
+                            continue
+                        with zf.open(member) as fh:
+                            return sum(1 for _ in io.TextIOWrapper(fh, errors="backslashreplace"))
+                    return None
+            if path.endswith(".7z"):
+                return None  # without py7zr we cannot stream safely; keyspace should have covered it
+            return sum(1 for _ in open(path, errors="backslashreplace"))
+        except Exception:
+            LOGGER.warning("Failed to count wordlist lines for %s", path, exc_info=True)
+            return None
 
     @classmethod
     def upload_rule(self, name, file):
@@ -673,6 +766,15 @@ class Hashcat(object):
         with open(path, "wb") as f:
             f.write(file)
 
+        try:
+            md5_hash = hashlib.md5(file).hexdigest()
+            with open(path, errors="backslashreplace") as fh:
+                line_count = sum(1 for line in fh if line.strip() and not line.lstrip().startswith("#"))
+        except Exception:
+            md5_hash = None
+            line_count = None
+        file_metadata.update_entry("rules", name, md5_hash, line_count)
+
     @classmethod
     def upload_mask(self, name, file):
         if not name.endswith(".hcmask"):
@@ -683,22 +785,29 @@ class Hashcat(object):
 
         with open(path, "wb") as f:
             f.write(file)
+        try:
+            md5_hash = hashlib.md5(file).hexdigest()
+            with open(path, errors="backslashreplace") as fh:
+                line_count = sum(1 for _ in fh)
+        except Exception:
+            md5_hash = None
+            line_count = None
+        file_metadata.update_entry("masks", name, md5_hash, line_count)
 
     @classmethod
     def upload_wordlist(self, name, file):
         name = name.replace(" ", "_")
-        original = name
         base = name
         ext = ""
-        if name.endswith(".tar.gz"):
-            base = name[:-7]
-            ext = ".tar.gz"
-        elif name.endswith(".gz"):
+        if name.endswith(".gz"):
             base = name[:-3]
             ext = ".gz"
         elif name.endswith(".zip"):
             base = name[:-4]
             ext = ".zip"
+        else:
+            # drop generic extension (e.g., .txt, .lst) before appending .wordlist
+            base = os.path.splitext(name)[0]
 
         if not base.endswith(".wordlist"):
             base = f"{base}.wordlist"
@@ -707,15 +816,36 @@ class Hashcat(object):
 
         path = os.path.join(os.path.dirname(__file__), "..", "Files", "Wordlistfiles", name)
 
+        # Compute md5 and line count before writing to disk
+        md5_hash = hashlib.md5(file).hexdigest()
+        line_count: Optional[int] = None
+
+        try:
+            if ext == ".gz":
+                import gzip
+                with gzip.open(io.BytesIO(file), "rt", errors="backslashreplace") as fh:
+                    line_count = sum(1 for _ in fh)
+            elif ext == ".zip":
+                import zipfile
+                with zipfile.ZipFile(io.BytesIO(file)) as zf:
+                    for member in zf.infolist():
+                        if member.is_dir():
+                            continue
+                        with zf.open(member) as fh:
+                            line_count = sum(1 for _ in io.TextIOWrapper(fh, errors="backslashreplace"))
+                        break
+            elif ext == ".7z":
+                # Unsupported for in-memory line counting; keep None
+                line_count = None
+            else:
+                line_count = file.count(b"\n")
+        except Exception:
+            LOGGER.warning("Unable to precompute line count for %s", name, exc_info=True)
+
         with open(path, "wb") as f:
             f.write(file)
 
-        if ext == "":
-            try:
-                line_count = sum(1 for _ in open(path, errors="backslashreplace"))
-                file_metadata.update_entry(name, "", line_count)
-            except Exception:
-                LOGGER.warning("Unable to precompute line count for %s", name)
+        file_metadata.update_entry("wordlists", name, md5_hash, line_count)
 
     @classmethod
     def remove_rule(self, name):
@@ -726,6 +856,7 @@ class Hashcat(object):
             os.remove(path)
         except Exception as e:
             pass
+        file_metadata.remove_entry("rules", name)
 
     @classmethod
     def remove_mask(self, name):
@@ -736,6 +867,7 @@ class Hashcat(object):
             os.remove(path)
         except Exception as e:
             pass
+        file_metadata.remove_entry("masks", name)
 
     @classmethod
     def remove_wordlist(self, name):
@@ -746,6 +878,29 @@ class Hashcat(object):
             os.remove(path)
         except Exception as e:
             pass
+        file_metadata.remove_entry("wordlists", name)
+
+    @classmethod
+    def ensure_hashfile_exists(self, hashfile) -> str:
+        """
+        Guarantee that the hashfile exists on disk; if missing, rebuild it from DB entries.
+        """
+        hashfile_path = os.path.join(os.path.dirname(__file__), "..", "Files", "Hashfiles", hashfile.hashfile)
+        if os.path.exists(hashfile_path):
+            return hashfile_path
+
+        hashes = list(Hash.objects.filter(hashfile=hashfile))
+        if not hashes:
+            raise FileNotFoundError(f"No backing file or rows found for hashfile {hashfile.id}")
+
+        os.makedirs(os.path.dirname(hashfile_path), exist_ok=True)
+        with open(hashfile_path, "w", encoding="utf-8", errors="backslashreplace") as fh:
+            for entry in hashes:
+                if hashfile.username_included and entry.username:
+                    fh.write(f"{entry.username}:{entry.hash}\n")
+                else:
+                    fh.write(f"{entry.hash}\n")
+        return hashfile_path
 
     @classmethod
     def update_hashfiles(self):

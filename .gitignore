@@ -17,6 +17,10 @@ WebHashcat/Files/Crackedfiles/*.crackedfile
 WebHashcat/Files/Maskfiles/*.hcmask
 WebHashcat/Files/Rulefiles/*.rule
 WebHashcat/Files/Wordlistfiles/*.wordlist
+WebHashcat/Files/**/*.zip
+WebHashcat/Files/**/*.gz
+WebHashcat/Files/**/*.7z
+WebHashcat/Files/**/*.json
 WebHashcat/Files/Searches/**
 !WebHashcat/Files/Searches/.gitkeep
 
@@ -29,6 +33,10 @@ HashcatNode/masks/*.hcmask
 HashcatNode/potfiles/*.potfile
 HashcatNode/wordlists/*.wordlist
 HashcatNode/outputs/*.output
+HashcatNode/**/*.zip
+HashcatNode/**/*.gz
+HashcatNode/**/*.7z
+HashcatNode/**/*.json
 
 # --- Python cache / build output ---
 __pycache__/

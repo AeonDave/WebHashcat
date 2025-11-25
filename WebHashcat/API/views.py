@@ -129,11 +129,11 @@ def api_node_status(request):
         cached = node_snapshots.get(str(node.id))
         version = cached.get("version") if cached else ""
         status = cached.get("status") if cached else "Unknown"
-        data.append([
-            node.name,
-            version or "",
-            status or "Unknown",
-        ])
+        data.append({
+            "name": node.name,
+            "version": version or "",
+            "status": status or "Unknown",
+        })
 
     result["data"] = data
     result["cache"] = metadata
@@ -149,7 +149,7 @@ def api_statistics(request):
         params = request.GET
 
     result = {
-        "draw": params["draw"],
+        "draw": params.get("draw", "0"),
     }
 
     data = []
@@ -165,14 +165,14 @@ def api_statistics(request):
     if count_cracked == None:
         count_cracked = 0
     if count_lines == None:
-        data.append(["<b>Lines</b>", humanize.intcomma(0)])
-        data.append(["<b>Cracked</b>", "%s (%.2f%%)" % (humanize.intcomma(count_cracked), 0)])
+        data.append({"label": "<b>Lines</b>", "value": humanize.intcomma(0)})
+        data.append({"label": "<b>Cracked</b>", "value": "%s (%.2f%%)" % (humanize.intcomma(count_cracked), 0)})
     else:
-        data.append(["<b>Lines</b>", humanize.intcomma(count_lines)])
-        data.append(["<b>Cracked</b>", "%s (%.2f%%)" % (humanize.intcomma(count_cracked),
-                                                        count_cracked / count_lines * 100.0 if count_lines != 0 else 0.0)])
-    data.append(["<b>Hashfiles</b>", Hashfile.objects.count()])
-    data.append(["<b>Nodes</b>", Node.objects.count()])
+        data.append({"label": "<b>Lines</b>", "value": humanize.intcomma(count_lines)})
+        data.append({"label": "<b>Cracked</b>", "value": "%s (%.2f%%)" % (humanize.intcomma(count_cracked),
+                                                        count_cracked / count_lines * 100.0 if count_lines != 0 else 0.0)})
+    data.append({"label": "<b>Hashfiles</b>", "value": Hashfile.objects.count()})
+    data.append({"label": "<b>Nodes</b>", "value": Node.objects.count()})
 
     result["data"] = data
 
@@ -694,10 +694,13 @@ def api_hashfile_action(request):
     if hashfile.owner != request.user and not request.user.is_staff:
         raise Http404("You do not have permission to view this object.")
 
-    print("Hashfile %s action %s" % (hashfile.name, params["action"]))
-
     if params["action"] == "remove":
-        remove_hashfile_task.delay(hashfile.id)
+        try:
+            # Prefer synchronous removal to ensure filesystem cleanup even if Celery is down
+            Hashcat.remove_hashfile(hashfile)
+        except Exception as exc:  # pragma: no cover - log and fall back to async
+            logger.exception("Synchronous hashfile removal failed for %s, scheduling task: %s", hashfile.name, exc)
+            remove_hashfile_task.delay(hashfile.id)
 
     return HttpResponse(json.dumps({"result": "success"}), content_type="application/json")
 
@@ -710,7 +713,10 @@ def api_get_messages(request):
 
     message_list = []
     for task in Task.objects.all():
-        message_list.append({"message": task.message})
+        message_list.append({
+            "type": "error" if "error" in (task.message or "").lower() else "info",
+            "content": task.message,
+        })
 
     return HttpResponse(json.dumps({"result": "success", "messages": message_list}), content_type="application/json")
 
@@ -881,24 +887,24 @@ def api_upload_file(request):
 
 
 def _render_session_buttons(status: str, session_name: str) -> str:
+    def btn(label, action, style):
+        return (
+            f"<button type='button' class='px-2 py-1 text-xs rounded {style}' "
+            f"onClick='session_action(\"{session_name}\", \"{action}\")'>{label}</button>"
+        )
+
+    buttons = []
     if status == "Not started":
-        buttons = "<button title='Start session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (
-            session_name, "start")
-        buttons += "<button title='Remove session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (
-            session_name, "remove")
+        buttons.append(btn("Start", "start", "bg-emerald-900/40 border border-emerald-700 text-emerald-200"))
+        buttons.append(btn("Remove", "remove", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
     elif status == "Running":
-        buttons = "<button title='Pause session' type='button' class='btn btn-warning btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-pause'></span></button>" % (
-            session_name, "pause")
-        buttons += "<button title='Stop session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-stop'></span></button>" % (
-            session_name, "quit")
+        buttons.append(btn("Pause", "pause", "bg-amber-900/40 border border-amber-700 text-amber-200"))
+        buttons.append(btn("Stop", "quit", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
     elif status == "Paused":
-        buttons = "<button title='Resume session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (
-            session_name, "resume")
-        buttons += "<button title='Stop session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-stop'></span></button>" % (
-            session_name, "quit")
+        buttons.append(btn("Resume", "resume", "bg-emerald-900/40 border border-emerald-700 text-emerald-200"))
+        buttons.append(btn("Stop", "quit", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
     else:
-        buttons = "<button title='Start session' type='button' class='btn btn-success btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-play'></span></button>" % (
-            session_name, "start")
-        buttons += "<button title='Remove session' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='session_action(\"%s\", \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (
-            session_name, "remove")
-    return "<div style='float: right'>%s</div>" % buttons
+        buttons.append(btn("Start", "start", "bg-emerald-900/40 border border-emerald-700 text-emerald-200"))
+        buttons.append(btn("Remove", "remove", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
+
+    return "<div class='flex justify-end gap-1'>%s</div>" % "".join(buttons)

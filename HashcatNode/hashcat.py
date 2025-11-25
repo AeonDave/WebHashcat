@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import platform
 
 try:
     from datetime import UTC, datetime
@@ -47,6 +48,7 @@ database = SqliteDatabase(DB_PATH)
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+SERVER_START = time.time()
 
 
 class HashcatExecutionError(RuntimeError):
@@ -66,6 +68,7 @@ class Hashcat(object):
     mask_dir: str = ""
     wordlist_dir: str = ""
     version: str = ""
+    system_info: Dict[str, Any] = {}
     hash_modes: Dict[int, Dict[str, str]] = {}
     rules: Dict[str, Dict[str, str]] = {}
     masks: Dict[str, Dict[str, str]] = {}
@@ -99,8 +102,13 @@ class Hashcat(object):
         file_list = [join(directory, f) for f in listdir(directory) if isfile(join(directory, f)) and f != ".gitkeep"]
 
         for file in file_list:
-            if extension and not file.endswith(extension):
-                continue
+            if extension:
+                if not file.endswith(extension):
+                    continue
+            else:
+                # wordlists: allow only specific extensions
+                if not file.endswith((".wordlist", ".gz", ".zip", ".txt", ".list")):
+                    continue
             assets[os.path.basename(file)] = {
                 "name": os.path.basename(file),
                 "md5": cls._md5_for_file(file),
@@ -178,6 +186,59 @@ class Hashcat(object):
             for chunk in iter(lambda: handle.read(8192), b""):
                 file_hash.update(chunk)
         return file_hash.hexdigest()
+
+    @classmethod
+    def _detect_system_info(cls) -> Dict[str, Any]:
+        info: Dict[str, Any] = {}
+        info["os"] = platform.platform() or "Unknown"
+        info["environment"] = "Docker" if os.path.exists("/.dockerenv") else "Baremetal/VM"
+        info["cpu_count"] = os.cpu_count()
+        info["cpu_model"] = None
+        if os.path.exists("/proc/cpuinfo"):
+            try:
+                with open("/proc/cpuinfo", "r") as fh:
+                    for line in fh:
+                        if line.lower().startswith("model name"):
+                            info["cpu_model"] = line.split(":", 1)[1].strip()
+                            break
+            except Exception:
+                pass
+        try:
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            phys_pages = os.sysconf("SC_PHYS_PAGES")
+            info["memory_bytes"] = page_size * phys_pages
+        except Exception:
+            info["memory_bytes"] = None
+
+        # Try hashcat -I to discover devices
+        devices: List[str] = []
+        try:
+            binary = cls.get_binary()
+            if binary:
+                result = cls.run_hashcat([binary, "-I"], capture_output=True, text=True, check=False)
+                for line in (result.stdout or "").splitlines():
+                    line = line.strip()
+                    if line.startswith("Device #"):
+                        devices.append(line)
+        except Exception:
+            LOGGER.debug("Unable to enumerate devices via hashcat -I", exc_info=True)
+        info["devices"] = devices
+        return info
+
+    @classmethod
+    def get_system_info(cls) -> Dict[str, Any]:
+        if not cls.system_info:
+            cls.system_info = cls._detect_system_info()
+        # always update uptime dynamically
+        cls.system_info["uptime_seconds"] = int(time.time() - SERVER_START)
+        # ensure keys exist
+        cls.system_info.setdefault("os", "Unknown")
+        cls.system_info.setdefault("environment", "Unknown")
+        cls.system_info.setdefault("cpu_count", None)
+        cls.system_info.setdefault("cpu_model", None)
+        cls.system_info.setdefault("memory_bytes", None)
+        cls.system_info.setdefault("devices", [])
+        return cls.system_info
 
     """
         Parse hashcat version
@@ -448,7 +509,7 @@ class Hashcat(object):
 
         name = name.split("/")[-1]
 
-        if not name.endswith((".wordlist", ".gz", ".zip")):
+        if not name.endswith((".wordlist", ".gz", ".zip", ".txt", ".list")):
             name += ".wordlist"
 
         path = os.path.join(self.wordlist_dir, name)
@@ -459,13 +520,44 @@ class Hashcat(object):
             except Exception as e:
                 pass
 
-        f = open(path, "wb")
-        f.write(wordlists)
-        f.close()
+        with open(path, "wb") as f:
+            f.write(wordlists)
 
         self.parse_wordlists()
 
         logging.info("Wordlist file %s uploaded" % name)
+
+    @classmethod
+    def remove_wordlist(self, name):
+        name = name.split("/")[-1]
+        path = os.path.join(self.wordlist_dir, name)
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        # refresh inventory
+        self.parse_wordlists()
+
+    @classmethod
+    def upload_wordlist_stream(self, name, file_obj):
+        """
+        Stream an uploaded wordlist to disk without loading it all in memory.
+        """
+        name = name.split("/")[-1]
+        if not name.endswith((".wordlist", ".gz", ".zip", ".txt", ".list")):
+            name += ".wordlist"
+        path = os.path.join(self.wordlist_dir, name)
+        if name in self.wordlists:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        os.makedirs(self.wordlist_dir, exist_ok=True)
+        with open(path, "wb") as out:
+            for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+                out.write(chunk)
+        self.parse_wordlists()
+        logging.info("Wordlist file %s uploaded (stream)" % name)
 
     """
         Returns the number of running/paused hashcat sessions

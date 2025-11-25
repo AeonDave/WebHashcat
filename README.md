@@ -1,4 +1,4 @@
-# WebHashcat
+# WebHashcat (Modernized)
 
 Hashcat orchestration with a Django web UI, Celery workers, and Docker-first workflows.
 
@@ -12,17 +12,18 @@ Hashcat orchestration with a Django web UI, Celery workers, and Docker-first wor
 - [Managing nodes and assets](#managing-nodes-and-assets)
 - [Manual installation](#manual-installation)
 - [Operating-system improvements](#operating-system-improvements)
+- [Changelog (Modernized)](#changelog-modernized)
 
 ---
 
 ## Overview
 
-WebHashcat exposes the hashcat CLI through a Django application and a lightweight HTTPS node agent.
+WebHashcat (Modernized) exposes the hashcat CLI through a Django application and a lightweight HTTPS node agent.
 
 - Distributed orchestration: register many GPU or CPU nodes, sync them, and trigger cracking jobs remotely.
 - Multiple attack modes: dictionary (rules plus wordlists) and mask attacks with live status, resume, and statistics.
 - Near real-time visibility: cracked hashes appear immediately, global potfiles stay synchronized, and the UI offers search and analytics.
-- Shared storage: uploaded hashfiles, rules, masks, and wordlists live under `WebHashcat/Files/**` and are mounted in both the `web` and `celery` containers.
+- Shared storage: uploaded hashfiles, rules, masks, and wordlists live under `WebHashcat/Files/**` and are mounted in both the `web` and `celery` containers. Metadata (md5 and line counts) is cached per category (wordlists/rules/masks) in a single JSON file to avoid expensive rescans.
 - Safe workloads: Celery tasks and per-hashfile locks prevent long-running operations from stepping on each other.
 
 ## Architecture
@@ -63,8 +64,8 @@ HashcatNode reads static settings (paths, bind, workload) from `HashcatNode/sett
 - Preferred: write username/password to `HashcatNode/secrets/hashcatnode_username` and `HashcatNode/secrets/hashcatnode_password` (mounted into the container at `/run/secrets/...` by default). You can rotate them with `python manage.py rotate_node_passwords` in the Django app and refresh the files accordingly.
 - Optional: set `HASHCATNODE_USERNAME` / `HASHCATNODE_PASSWORD` or `HASHCATNODE_HASH` env vars; these override `settings.ini`. Avoid storing passwords in `settings.ini` when secrets/env are available.
 - Paths (`HASHCATNODE_HASHES_DIR`, `..._RULES_DIR`, etc.) default to the Docker volume mounts; adjust via env if you change the volume layout.
-- The node’s SQLite database is stored in a Docker named volume (`hashcatnode-db`) mounted at `/hashcatnode/data`, driven by `HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db`. No manual file creation is needed.
-- Hashcat 7.1.x supports compressed wordlists on-the-fly (`.gz`, `.zip`, `.tar.gz`), so you can upload and keep wordlists in these formats; they are stored as-is and used directly by hashcat.
+- The node's SQLite database is stored in a Docker named volume (`hashcatnode-db`) mounted at `/hashcatnode/data`, driven by `HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db`. No manual file creation is needed.
+- Hashcat 7.1.x supports compressed wordlists on-the-fly (`.gz`, `.zip`, `.7z`), so you can upload and keep wordlists in these formats; they are stored as-is and used directly by hashcat.
 
 ### 3. Start one or more nodes
 
@@ -96,7 +97,7 @@ Tip: Nodes on other machines do not need the shared Docker network. Just publish
 
 ### 5. Upload assets and launch sessions
 
-- Use **Hashcat → Files** to upload hashfiles, wordlists, masks, and rules. Uploaded files stay under `WebHashcat/Files/**` until removed.
+- Use **Hashcat → Files** to upload hashfiles, wordlists, masks, and rules. Uploaded files stay under `WebHashcat/Files/**` until removed. Drag & drop supports multiple files per category; compressed wordlists (`.gz`, `.zip`, `.7z`) remain compressed on disk and are used directly by hashcat.
 - From **Hashcat → Hashfiles**, click **Add** to import a new hashfile. Use the `+` button beside a hashfile to define a cracking session, then hit **Play** to start it.
 - Sessions stream progress back to the UI; Celery workers keep the potfile and cracked counts in sync.
 
@@ -190,5 +191,14 @@ Large datasets (10 million+ hashes) benefit from a few system tweaks:
 - Periodically prune `WebHashcat/Files/tmp` if you upload extremely large files outside the normal Celery cleanup cadence.
 
 ---
+
+## Changelog (Modernized)
+
+- New dark UI built with Tailwind + Flowbite, consolidated JS, and dropzones for bulk uploads (wordlists/rules/masks).
+- Asset metadata now cached per category (wordlists/rules/masks) in one JSON file; md5 is recorded at upload and line counts are reused unless the file name changes.
+- Wordlists support compressed uploads (`.gz`, `.zip`, `.7z`) stored as-is; rules count only non-empty, non-comment lines for accurate rule counts.
+- Session creation hardens missing hashfiles: if the on-disk hashfile is absent it is regenerated from DB rows before contacting the node.
+- Node upload endpoint accepts JSON or multipart and disables compression headers for already-compressed uploads to avoid disconnects with large payloads.
+- Django/Celery cache: node and session snapshots served from Redis with staleness metadata to keep the UI responsive.
 
 Questions, bugs, or feature ideas? Open an issue or pull request and help keep WebHashcat current.

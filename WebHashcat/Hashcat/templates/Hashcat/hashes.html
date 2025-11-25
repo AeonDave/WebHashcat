@@ -1,583 +1,213 @@
 {% extends "base.html" %}
+{% load static %}
+
+{% block breadcrumb %}Hashes & Sessions{% endblock %}
+{% block title %}Hashes{% endblock %}
 
 {% block content %}
+<div id="messages" class="mb-4 min-h-[20px]"></div>
 
-   <div id="messages" style="margin-bottom: 15px;">
-   </div>
+<!-- Nodes snapshot -->
+<div class="card rounded-xl p-4 mb-6">
+  <div class="flex items-center justify-between mb-2">
+    <div class="text-lg font-semibold text-gray-100">Nodes</div>
+    <span id="node_cache_hint" class="text-xs text-gray-400"></span>
+  </div>
+  <table id="node_table" class="display nowrap w-full text-sm"></table>
+</div>
 
-   <div class="panel panel-primary">
-      <div class="panel-heading">
-         <h2 class="panel-title">Nodes</h2>
+<!-- Hashfiles -->
+<div class="card rounded-xl p-4">
+  <div class="flex items-center justify-between mb-3">
+    <div>
+      <div class="text-lg font-semibold text-gray-100">Hashfiles</div>
+      <p id="hashfile_cache_hint" class="text-xs text-gray-400"></p>
+    </div>
+    <div class="flex gap-2">
+      <button id="update_hashfiles" class="px-3 py-1.5 text-sm rounded-md bg-primary/20 text-primary border border-primary/40 hover:bg-primary/30">Update</button>
+      <button data-modal-target="action_add" data-modal-toggle="action_add" class="px-3 py-1.5 text-sm rounded-md bg-accent/20 text-accent border border-accent/40 hover:bg-accent/30">Add</button>
+    </div>
+  </div>
+  <table id="hashfile_table" class="display nowrap w-full text-sm"></table>
+</div>
+
+<!-- Modal: Add hashfile -->
+<div id="action_add" tabindex="-1" aria-hidden="true" class="fixed top-0 left-0 right-0 z-50 hidden w-full p-4 overflow-x-hidden overflow-y-auto md:inset-0 h-full">
+  <div class="relative w-full max-w-4xl">
+    <div class="relative rounded-lg shadow card p-6">
+      <div class="flex items-center justify-between border-b border-gray-800 pb-3 mb-4">
+        <h3 class="text-xl font-semibold text-gray-100">New hashfile</h3>
+        <button type="button" class="text-gray-400 hover:text-white" data-modal-hide="action_add">&times;</button>
       </div>
-      <div class="panel-body">
-         <table id="node_table" class="table table-striped table-condensed">
-            <thead>
-            <tr>
-               <td><b>Name</b></td>
-               <td><b>Hashcat version</b></td>
-               <td><b>Status</b></td>
-            </tr>
-            </thead>
-            <tbody>
-            </tbody>
-         </table>
+      <form action="{% url 'Hashcat:hashfiles' %}" method="post" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add">
+        <div>
+          <label class="block text-sm mb-1" for="hash_type">Hash type</label>
+          <select class="w-full rounded border border-gray-700 bg-[#0b1220] p-2" id="hash_type" name="hash_type">
+            {% for hash_type in hash_type_list %}
+            <option value="{{ hash_type.id }}">{{ hash_type.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm mb-1" for="name">Name</label>
+          <input type="text" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2" id="name" name="name" placeholder="Name for this hashfile">
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-sm mb-1" for="hashes">Hashes</label>
+          <textarea class="w-full rounded border border-gray-700 bg-[#0b1220] p-2" rows="4" id="hashes" name="hashes" placeholder="Paste hashes or leave empty and upload a file"></textarea>
+        </div>
+        <div>
+          <label class="block text-sm mb-1" for="hashfile">Hash file input</label>
+          <input type="file" id="hashfile" name="hashfile" class="text-sm text-gray-200">
+          <p class="text-xs text-gray-500 mt-1">Leave “Hashes” empty if you select a file.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" name="username_included" id="username_included" class="accent-primary">
+          <label for="username_included" class="text-sm">Username included (user:hash)</label>
+        </div>
+        <div class="md:col-span-2 flex justify-end gap-2 mt-2">
+          <button type="button" data-modal-hide="action_add" class="px-3 py-1.5 rounded border border-gray-700 text-gray-300">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: New session -->
+<div id="action_new" tabindex="-1" aria-hidden="true" class="fixed top-0 left-0 right-0 z-50 hidden w-full p-4 overflow-x-hidden overflow-y-auto md:inset-0 h-full">
+  <div class="relative w-full max-w-5xl">
+    <div class="relative rounded-lg shadow card p-6">
+      <div class="flex items-center justify-between border-b border-gray-800 pb-3 mb-4">
+        <h3 class="text-xl font-semibold text-gray-100" id="session_modal_title">New session</h3>
+        <button type="button" class="text-gray-400 hover:text-white" data-modal-hide="action_new">&times;</button>
       </div>
-   </div>
-
-      <p id="node_cache_hint" class="text-muted small cache-hint" style="margin-top: 10px;"></p>
-
-      <script type="text/javascript">
-        $(document).ready( function () {
-            // datatable
-            var table = $('#node_table').DataTable({
-               "processing": false,
-               "serverSide": true,
-               "searching": false,
-               "paging": false,
-               "ordering": false,
-               "info": false,
-               "pageLength": 100,
-               "columnDefs": [
-                   { "width": "40%", "targets": 0},
-                   { "width": "40%", "targets": 1},
-               ],
-               "ajax": {
-                  "url": "{% url 'API:api_node_status' %}",
-               },
-            });
-
-            table.on('xhr.dt', function (e, settings, json) {
-               updateCacheHint('#node_cache_hint', json && json.cache ? json.cache : null, 'Node snapshot');
-            });
- 
-            function autoRefresh()
-            {
-               //window.location.reload();
-               table.ajax.reload();
-            }
-            setInterval(autoRefresh, 30000); // this will reload page after every 30 seconds; Method II
-        });
-
-
-    </script>
-
-   <div class="panel panel-primary">
-      <div class="panel-heading">
-         <div style="float: right;">
-            <button id="update_hashfiles" class="btn btn-xs btn-success">Update</button>
-         </div>
-         <h2 class="panel-title">Hashfiles</h2>
+      <div class="mb-4">
+        <ul class="flex text-sm border-b border-gray-800" id="session_tabs" data-tabs-toggle="#session_tab_content">
+          <li class="me-2">
+            <button class="inline-block p-3 rounded-t-lg border-b-2" id="tab-dict" data-tabs-target="#dict_tab" type="button">Dictionary</button>
+          </li>
+          <li class="me-2">
+            <button class="inline-block p-3 rounded-t-lg border-b-2" id="tab-mask" data-tabs-target="#mask_tab" type="button">Mask</button>
+          </li>
+        </ul>
       </div>
-      <div class="panel-body">
-
-         {% load math %}
-
-         <table id="hashfile_table" class="table">
-            <thead>
-            <tr>
-               <td></td>
-               <td><b>Name</b></td>
-               <td><b>Type</b></td>
-               <td><b>Lines</b></td>
-               <td><b>Cracked</b></td>
-               <td><b>Usernames included ?</b></td>
-               <td><b>Running sessions</b></td>
-               <td></td>
-            </tr>
-            </thead>
-         </table>
-         <p id="hashfile_cache_hint" class="text-muted small cache-hint" style="margin-top: 10px;"></p>
-         </br>
-         <button type="button" class="btn btn-primary btn-xs" data-toggle="modal" data-target="#action_add" title="Add a new hashfile">Add</button></td>
-
-      </div>
-   </div>
-
-   <script type="text/javascript">
-/* Formatting function for row details - modify as you need */
-         // datatable
-         var hashfile_table = $('#hashfile_table').DataTable({
-            "processing": false,
-            "serverSide": true,
-            "columnDefs": [
-                {
-                  "className":      'details-control',
-                  "orderable":      false,
-                  "data":           null,
-                  "defaultContent": '',
-                  "targets": 0,
-                  "render": function () {
-                      return '<i class="fa fa-plus-square" aria-hidden="true"></i>';
-                  },
-                  "width": "15px",
-                },
-                { "data": "name", "width": "20%", "targets": 1},
-                { "data": "type", "width": "20%", "targets": 2},
-                { "data": "line_count", "width": "10%", "targets": 3},
-                { "data": "cracked", "width": "12%", "targets": 4},
-                { "data": "username_included", "orderable": false, "width": "15%", "targets": 5},
-                { "data": "sessions_count", "orderable": false, "targets": 6},
-                { "data": "buttons", "orderable": false, "width": "100px", "targets": 7},
-            ],
-            "ajax": {
-               "url": "{% url 'API:api_hashfiles' %}",
-            },
-            "order": [[1, 'asc']]
-         });
-
-         hashfile_table.on('xhr.dt', function (e, settings, json) {
-            updateCacheHint('#hashfile_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
-         });
-
-         function sub_DataTable(vtask_id, table_id) {
-             var subtable = $('table#'+table_id).DataTable({
-                  "processing": false,
-                  "serverSide": true,
-                  "searching": false,
-                  "paging": false,
-                  "ordering": false,
-                  "info": false,
-                  "pageLength": 100,
-                  "ajax": {
-                     "url": "{% url 'API:api_hashfile_sessions' %}",
-                     "data": function(d) {
-                        d.hashfile_id = vtask_id;
-                     },
-                  },
-                  "columnDefs": [
-                     { "data": "node", "width": "10%", "targets": 0},
-                     { "data": "type", "width": "5%", "targets": 1},
-                     { "data": "rule_mask", "width": "12%", "targets": 2},
-                     { "data": "wordlist", "width": "12%", "targets": 3},
-                     { "data": "status", "width": "5%", "targets": 4},
-                     { "data": "remaining", "width": "30%", "targets": 5},
-                     { "data": "progress", "width": "5%", "targets": 6},
-                     { "data": "speed", "width": "15%", "targets": 7},
-                     { "data": "buttons", "width": "6%", "targets": 8},
-                  ],
-             });
-
-                   subtable.on('xhr.dt', function (e, settings, json) {
-                     updateCacheHint('#hashfile_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
-                   });
-         }
-
-         function format ( table_id ) {
-             // `d` is the original data object for the row
-             return '<table id="'+table_id+'" class="display table table-striped table-condensed" border="0" style="padding-left:50px; width:100%;">'+
-             '<thead>'+
-             '<th>Node</th>'+
-             '<th>Type</th>'+
-             '<th>Rule/Mask</th>'+
-             '<th>Wordlist</th>'+
-             '<th>Status</th>'+
-             '<th>Remaining time</th>'+
-             '<th>Progress</th>'+
-             '<th>Speed</th>'+
-             '<th></th>'+
-             '</thead>'+
-             '</table>';
-         }
-
-         var opened_array = [];
-
-         function reload_hashfile_table()
-         {
-            hashfile_table.ajax.reload(function ()
-            {
-
-               // reopen rows
-               for (var i = 0; i < opened_array.length; i++) {
-
-                  var tr = $('tr#' + opened_array[i]);
-                  var tdi = tr.find("i.fa");
-                  var row = hashfile_table.row("#" + opened_array[i]);
-
-                  var virtual_task_id = row.data()["DT_RowId"];
-                  var subtable_id = "subtable-"+virtual_task_id;
-
-                  row.child(format(subtable_id)).show();
-                  tr.addClass('shown');
-                  tdi.first().removeClass('fa-plus-square');
-                  tdi.first().addClass('fa-minus-square');
-
-                  sub_DataTable(virtual_task_id, subtable_id);
-               };
-
-            });
-         }
-
-        function session_action(session_name, action){
-           if(action == "remove")
-           {
-              res = window.confirm("Are you sure?");
-
-              if(res == false)
-              {
-                 return
-              }
-           }
-
-           $.ajax({
-               'url' : '{% url "API:api_session_action" %}',
-               'type' : 'GET',
-               'data' : {
-                  'session_name' : session_name,
-                  'action' : action
-               },
-               'success' : function(data) {
-                  reload_hashfile_table();
-               }
-           });
-        }
-
-        function hashfile_action(hashfile_id, action){
-           if(action == "remove")
-           {
-              res = window.confirm("Are you sure?");
-
-              if(res == false)
-              {
-                 return
-              }
-           }
-
-           $.ajax({
-               'url' : '{% url "API:api_hashfile_action" %}',
-               'type' : 'GET',
-               'data' : {
-                  'hashfile_id' : hashfile_id,
-                  'action' : action
-               },
-               'success' : function(data) {
-                  reload_hashfile_table();
-               }
-           });
-        }
-
-        function update_messages() {
-           $.getJSON('{% url "API:api_get_messages" %}', function (data) {
-              $('#messages').empty();
-              for (i = 0; i < data['messages'].length; i++) {
-                 $('#messages').append('<div class="alert alert-info" style="margin-bottom: 5px;">' + data['messages'][i]['message'] + '</div>');
-              }
-           });
-        }
-
-        function update_all() {
-            update_messages();
-            reload_hashfile_table();
-        }
-
-        $(document).ready( function () {
-                        
-            // Add event listener for opening and closing details
-            $('#hashfile_table tbody').on('click', 'td.details-control', function () {
-                var tr = $(this).closest('tr');
-                var tdi = tr.find("i.fa");
-                var row = hashfile_table.row(tr);
-
-                if (row.child.isShown()) {
-                    // This row is already open - close it
-                    row.child.hide();
-                    tr.removeClass('shown');
-                    tdi.first().removeClass('fa-minus-square');
-                    tdi.first().addClass('fa-plus-square');
-
-                    var index = opened_array.indexOf(tr.attr('id'));
-                    if (index > -1) {
-                        opened_array.splice(index, 1);
-                    }
-                }
-                else {
-                    // Open this row
-                    var virtual_task_id = row.data()["DT_RowId"];
-                    var subtable_id = "subtable-"+virtual_task_id;
-                    // Open this row
-                    row.child(format(subtable_id)).show();
-                    tr.addClass('shown');
-                    tdi.first().removeClass('fa-plus-square');
-                    tdi.first().addClass('fa-minus-square');
-
-                    var index = opened_array.indexOf(tr.attr('id'));
-                    if (index == -1) {
-                        opened_array.push(tr.attr('id'));
-                    }
-
-                    sub_DataTable(virtual_task_id, subtable_id);
-                }
-            });
-
-            document.getElementById("update_hashfiles").addEventListener('click',update_all);
-
-            setInterval(update_all, 60000); // this will reload page after every 60 seconds;
-            update_messages();
-      });
-
-   </script>
-
-   <script type="text/javascript">
-      $(function() {
-          $('.confirm').click(function() {
-              return window.confirm("Are you sure?");
-          });
-      });
-   </script>
-
-
-   <!-- Modal -->
-   <div class="modal fade" id="action_new" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
-     <div class="modal-dialog modal-lg" role="document">
-       <div class="modal-content">
-         <div class="modal-header">
-           <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-           <h4 class="modal-title" id="myModalLabel">New session</h4>
-         </div>
-
-            <div class="modal-body">
-               <!-- Nav tabs -->
-               <ul class="nav nav-tabs" role="tablist">
-                  <li class="active" ><a href="#dictionary_bruteforce" aria-controls="dictionary_bruteforce" role="tab" data-toggle="tab">Dictionary-based bruteforce</a></li>
-                  <li><a href="#mask_bruteforce" aria-controls="mask_bruteforce" role="tab" data-toggle="tab">Mask-based bruteforce</a></li>
-               </ul>
-
-               <!-- Tab panes -->
-               <div class="tab-content">
-                  <div role="tabpanel" class="tab-pane active" id="dictionary_bruteforce">
-
-                     <form action="{% url "Hashcat:new_session" %}" enctype="multipart/form-data" method="post">
-                     {% csrf_token %}
-                     <input type="hidden" id="crack_type" name="crack_type" value="dictionary">
-
-                     <input type="hidden" id="hashfile_id" name="hashfile_id">
-
-                     <label for="node">Node</label>
-                     </br>
-                     <select name="node" id="node_mask">
-                        {% for node in node_list %}
-                        <option value="{{ node.name }}">{{ node.name }}</option>
-                        {% endfor %}
-                     </select>
-                     </br>
-                     </br>
-
-                     <label for="rule">Rule</label>
-                     </br>
-                     <select name="rule" id="rule">
-                        {% for rule in rule_list %}
-                        <option value="{{ rule.name }}">{{ rule.name }}</option>
-                        {% endfor %}
-                     </select>
-                     </br>
-                     </br>
-
-                     <label for="wordlist">Wordlist</label>
-                     </br>
-                     <select name="wordlist" id="wordlist">
-                        {% for wordlist in wordlist_list %}
-                        <option value="{{ wordlist.name }}">{{ wordlist.name }}</option>
-                        {% endfor %}
-                     </select>
-                     </br>
-                     </br>
-
-                     <label for="device_type">Device Type</label>
-                     </br>
-                     <div id="device_type_label_dict" class="form-control-static">Detecting from node…</div>
-                     <input type="hidden" name="device_type" id="device_type_input_dict" value="1">
-                     </br>
-                     </br>
-
-                     <label for="brain_mode">Brain</label>
-                     </br>
-                     <select name="brain_mode" id="brain_mode">
-                        <option value="0">Disabled</option>
-                        <option value="1">Send hashed passwords</option>
-                        <option value="2">Send attack positions</option>
-                        <option value="3">Send hashed passwords and attack positions</option>
-                     </select>
-                     </br>
-                     </br>
-
-                     <label for="device_type">End Date (Optional)</label>
-                     </br>
-                     <div class='input-group date' id='datetimepicker_dict'>
-                        <input type='text' class="form-control" name="end_datetime" />
-                        <span class="input-group-addon">
-                           <span class="glyphicon glyphicon-calendar"></span>
-                        </span>
-                     </div>
-                     </br>
-
-                     <input type="checkbox" name="debug" value="debug" id="debug"><label for="debug">  Save hashcat output file for debug purposes</label>
-                     </br>
-                     </br>
-
-                     <button type="submit" class="btn btn-primary" >Create session</button>
-                     </form>
-                  </div>
-
-                  <script type="text/javascript">
-                     $(function () {
-                        $('#datetimepicker_dict').datetimepicker();
-                     });
-                  </script>
-
-
-                  <div role="tabpanel" class="tab-pane" id="mask_bruteforce">
-
-                     <form action="{% url "Hashcat:new_session" %}" enctype="multipart/form-data" method="post">
-                     {% csrf_token %}
-                     <input type="hidden" id="crack_type" name="crack_type" value="mask">
-
-                     <input type="hidden" id="hashfile_id" name="hashfile_id">
-
-                     <label for="node">Node</label>
-                     </br>
-                     <select name="node" id="node_dict">
-                        {% for node in node_list %}
-                        <option value="{{ node.name }}">{{ node.name }}</option>
-                        {% endfor %}
-                     </select>
-                     </br>
-                     </br>
-
-
-                     <label for="mask">Mask</label>
-                     </br>
-                     <select name="mask" id="mask">
-                        {% for mask in mask_list %}
-                        <option value="{{ mask.name }}">{{ mask.name }}</option>
-                        {% endfor %}
-                     </select>
-                     </br>
-                     </br>
-
-                     <label for="device_type">Device Type</label>
-                     </br>
-                     <div id="device_type_label_mask" class="form-control-static">Detecting from node…</div>
-                     <input type="hidden" name="device_type" id="device_type_input_mask" value="1">
-                     </br>
-                     </br>
-
-                     <label for="device_type">End Date (Optional)</label>
-                     </br>
-                     <div class='input-group date' id='datetimepicker_btf'>
-                        <input type='text' class="form-control" name="end_datetime" />
-                        <span class="input-group-addon">
-                           <span class="glyphicon glyphicon-calendar"></span>
-                        </span>
-                     </div>
-                     </br>
-
-                     <input type="checkbox" name="debug" value="debug" id="debug"><label for="debug">  Save hashcat output file for debug purposes</label>
-                     </br>
-                     </br>
-
-                     <button type="submit" class="btn btn-primary" >Create session</button>
-                     </form>
-                  </div>
-
-                  <script type="text/javascript">
-                     $(function () {
-                        $('#datetimepicker_btf').datetimepicker();
-                     });
-                  </script>
-
-               </div>
+      <div id="session_tab_content">
+        <div class="hidden" id="dict_tab">
+          <form action="{% url "Hashcat:new_session" %}" enctype="multipart/form-data" method="post" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {% csrf_token %}
+            <input type="hidden" name="crack_type" value="dictionary">
+            <input type="hidden" id="hashfile_id_dict" name="hashfile_id">
+            <label class="block text-sm">Node
+              <select name="node" id="node_dict" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for node in node_list %}
+                <option value="{{ node.name }}">{{ node.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block text-sm">Hash type
+              <select name="hash_type" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for hash_type in hash_type_list %}
+                <option value="{{ hash_type.id }}">{{ hash_type.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block text-sm">Rule
+              <select name="rule" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for rule in rule_list %}
+                <option value="{{ rule.name }}">{{ rule.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block text-sm">Wordlist
+              <select name="wordlist" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for wordlist in wordlist_list %}
+                <option value="{{ wordlist.name }}">{{ wordlist.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <div>
+              <div class="text-sm mb-1">Device type</div>
+              <div id="device_type_label_dict" class="text-primary text-sm">Detecting from node…</div>
+              <input type="hidden" name="device_type" id="device_type_input_dict" value="1">
             </div>
-
-            <div class="modal-footer">
+            <label class="block text-sm">Brain
+              <select name="brain_mode" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                <option value="0">Disabled</option>
+                <option value="1">Send hashed passwords</option>
+                <option value="2">Send attack positions</option>
+                <option value="3">Send hashed passwords and attack positions</option>
+              </select>
+            </label>
+            <label class="block text-sm">End date (optional)
+              <input type="text" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1" name="end_datetime" id="end_dict">
+            </label>
+            <label class="flex items-center gap-2 text-sm mt-2">
+              <input type="checkbox" name="debug" value="debug" class="accent-primary">
+              Save hashcat output file for debug
+            </label>
+            <div class="md:col-span-2 flex justify-end gap-2 mt-2">
+              <button type="button" data-modal-hide="action_new" class="px-3 py-1.5 rounded border border-gray-700 text-gray-300">Cancel</button>
+              <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Create session</button>
             </div>
-       </div>
-     </div>
-   </div>
+          </form>
+        </div>
 
-   <script type="text/javascript">
-      const nodeDeviceMap = {{ node_device_map_json|default:"{}"|safe }};
+        <div class="hidden" id="mask_tab">
+          <form action="{% url "Hashcat:new_session" %}" enctype="multipart/form-data" method="post" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {% csrf_token %}
+            <input type="hidden" name="crack_type" value="mask">
+            <input type="hidden" id="hashfile_id_mask" name="hashfile_id">
+            <label class="block text-sm">Node
+              <select name="node" id="node_mask" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for node in node_list %}
+                <option value="{{ node.name }}">{{ node.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block text-sm">Mask
+              <select name="mask" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for mask in mask_list %}
+                <option value="{{ mask.name }}">{{ mask.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <div>
+              <div class="text-sm mb-1">Device type</div>
+              <div id="device_type_label_mask" class="text-primary text-sm">Detecting from node…</div>
+              <input type="hidden" name="device_type" id="device_type_input_mask" value="1">
+            </div>
+            <label class="block text-sm">End date (optional)
+              <input type="text" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1" name="end_datetime" id="end_mask">
+            </label>
+            <label class="flex items-center gap-2 text-sm mt-2">
+              <input type="checkbox" name="debug" value="debug" class="accent-primary">
+              Save hashcat output file for debug
+            </label>
+            <div class="md:col-span-2 flex justify-end gap-2 mt-2">
+              <button type="button" data-modal-hide="action_new" class="px-3 py-1.5 rounded border border-gray-700 text-gray-300">Cancel</button>
+              <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Create session</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
-      function deviceTypeLabel(value) {
-         if (value === 2) return "GPU (from node)";
-         if (value === 3) return "FPGA/DSP/Co-processor (from node)";
-         return "CPU (from node)";
-      }
-
-      function updateDeviceDisplay(selectSelector, labelSelector, inputSelector) {
-         const nodeName = $(selectSelector).val();
-         const dtype = nodeDeviceMap[nodeName] || 1;
-         $(labelSelector).text(deviceTypeLabel(dtype));
-         $(inputSelector).val(dtype);
-      }
-
-      $('#node_dict').on('change', function() {
-         updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict');
-      });
-      $('#node_mask').on('change', function() {
-         updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask');
-      });
-
-      $('#action_new').on('show.bs.modal', function (event) {
-         var button = $(event.relatedTarget) // Button that triggered the modal
-         var hashfile_name = button.data('hashfile') // Extract info from data-* attributes
-         var hashfile_id = button.data('hashfile_id') // Extract info from data-* attributes
-         var modal = $(this)
-         modal.find('.modal-title').text(hashfile_name + ': New session')
-         modal.find('input#hashfile_id').val(hashfile_id)
-         updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict');
-         updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask');
-      })
-   </script>
-
-   <!-- Modal -->
-   <div class="modal fade" id="action_add" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
-     <div class="modal-dialog modal-lg" role="document">
-       <div class="modal-content">
-         <div class="modal-header">
-           <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-           <h4 class="modal-title" id="myModalLabel">Add hashfile</h4>
-         </div>
-            <div class="modal-body">
-                     <form enctype="multipart/form-data" method="post">
-                     {% csrf_token %}
-                     <input type="hidden" id="action" name="action" value="add">
-
-                     <label for="name">Name</label>
-                     <input type="text" class="form-control" id="name" name="name">
-                     </br>
-
-                     <div>
-
-                        <div style="float: right;">
-                           <p><small>Unsure about which hash type to choose ? <a href="https://hashcat.net/wiki/doku.php?id=example_hashes" target="_blank">check this</a></small></p>
-                        </div>
-                        <label for="hash_type">Hash type</label>
-                        </br>
-                        <select name="hash_type" id="hash_type">
-                           {% for hash_type in hash_type_list %}
-                           <option value="{{ hash_type.id }}">{{ hash_type.name }}</option>
-                           {% endfor %}
-                        </select>
-                     </div>
-                     </br>
-
-                     <label for="hashes">Hashes</label>
-                     </br>
-                     <textarea name="hashes" id="hashes" rows="10" cols="60"></textarea>
-
-                     <input type="file" name="hashfile" size="40">
-
-                     <input type="checkbox" name="username_included" value="username_included">Username included (format username:hash)
-                     <br>
-                     <br>
-                     <button type="submit" class="btn btn-primary" >Add new hashfile</button>
-                     </form>
-         </div>
-
-         <div class="modal-footer">
-         </div>
-       </div>
-     </div>
-   </div>
-
-
+<script src="{% static 'js/cache.js' %}"></script>
+<script>
+    window.hashesConfig = {
+      nodeStatusUrl: "{% url 'API:api_node_status' %}",
+      hashfilesUrl: "{% url 'API:api_hashfiles' %}",
+      hashfileSessionsUrl: "{% url 'API:api_hashfile_sessions' %}",
+      sessionActionUrl: "{% url 'API:api_session_action' %}",
+      hashfileActionUrl: "{% url 'API:api_hashfile_action' %}",
+      messagesUrl: "{% url 'API:api_get_messages' %}",
+      nodeDeviceMap: {{ node_device_map_json|default:"{}"|safe }},
+    };
+</script>
+<script src="{% static 'js/hashes.js' %}"></script>
 {% endblock %}

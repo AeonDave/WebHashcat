@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate, login
+from django.contrib.auth import logout
 from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.template import loader
@@ -23,3 +24,8 @@ def auth(request):
 
     template = loader.get_template('Auth/auth.html')
     return HttpResponse(template.render(context, request))
+
+
+def logout_view(request):
+    logout(request)
+    return redirect('Auth:auth')

@@ -11,9 +11,6 @@ from django.template import loader
 
 from .models import Node
 
-
-# Create your views here.
-
 @login_required
 @staff_member_required
 def nodes(request, error_msg=""):
@@ -23,7 +20,44 @@ def nodes(request, error_msg=""):
     if len(error_msg) != 0:
         context["error_message"] = error_msg
 
-    context["node_list"] = Node.objects.all()
+    node_rows = []
+    local_rules = Hashcat.get_rules()
+    local_masks = Hashcat.get_masks()
+    local_wordlists = Hashcat.get_wordlists()
+
+    def _is_synced(remote, local_items):
+        for item in local_items:
+            name = item["name"]
+            remote_item = remote.get(name)
+            if not remote_item:
+                return False
+            if remote_item.get("md5") != item.get("md5"):
+                return False
+        return True
+
+    for node in Node.objects.all():
+        status = {"state": "unknown", "label": "Unknown"}
+        try:
+            api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+            info = api.get_hashcat_info()
+            if info.get("response") == "ok":
+                rules_ok = _is_synced(info.get("rules", {}), local_rules)
+                masks_ok = _is_synced(info.get("masks", {}), local_masks)
+                wordlists_ok = _is_synced(info.get("wordlists", {}), local_wordlists)
+                if rules_ok and masks_ok and wordlists_ok:
+                    status = {"state": "ok", "label": "Synced"}
+                else:
+                    status = {"state": "stale", "label": "Needs sync"}
+            else:
+                status = {"state": "error", "label": info.get("message", "Error")}
+        except HashcatAPIError:
+            status = {"state": "error", "label": "Unreachable"}
+        node_rows.append({
+            "obj": node,
+            "status": status,
+        })
+
+    context["node_rows"] = node_rows
 
     template = loader.get_template('Nodes/nodes.html')
     return HttpResponse(template.render(context, request))
@@ -52,34 +86,40 @@ def node(request, node_name, error_msg=""):
 
             try:
                 hashcat_api = HashcatAPI(node_item.hostname, node_item.port, node_item.username, node_item.password)
-                node_data = hashcat_api.get_hashcat_info()
+                # Build manifest of local assets and let node compare/delete extras
+                rule_list = Hashcat.get_rules()
+                mask_list = Hashcat.get_masks()
+                wordlist_list = Hashcat.get_wordlists()
+                manifest = {
+                    "rules": {r["name"]: r.get("md5") for r in rule_list},
+                    "masks": {m["name"]: m.get("md5") for m in mask_list},
+                    "wordlists": {w["name"]: w.get("md5") for w in wordlist_list},
+                }
+                compare_res = hashcat_api.compare_assets(manifest)
             except HashcatAPIError as exc:
                 return node(request, node_name, error_msg=f"Unable to synchronize node: {exc}")
 
-            if node_data.get("response") != "ok":
-                return node(request, node_name, error_msg=node_data.get("message", "Node returned an error"))
+            if compare_res.get("response") != "ok":
+                return node(request, node_name, error_msg=compare_res.get("message", "Node returned an error"))
 
-            rule_list = Hashcat.get_rules()
-            mask_list = Hashcat.get_masks()
-            wordlist_list = Hashcat.get_wordlists()
+            missing = compare_res.get("missing", {"rules": [], "masks": [], "wordlists": []})
 
             for rule in rule_list:
-                if not rule["name"] in node_data["rules"]:
-                    hashcat_api.upload_rule(rule["name"], open(rule["path"], 'rb').read())
-                elif node_data["rules"][rule["name"]]["md5"] != rule["md5"]:
-                    hashcat_api.upload_rule(rule["name"], open(rule["path"], 'rb').read())
+                if rule["name"] in missing.get("rules", []):
+                    with open(rule["path"], 'rb') as fh:
+                        hashcat_api.upload_rule(rule["name"], fh.read())
 
             for mask in mask_list:
-                if not mask["name"] in node_data["masks"]:
-                    hashcat_api.upload_mask(mask["name"], open(mask["path"], 'rb').read())
-                elif node_data["masks"][mask["name"]]["md5"] != mask["md5"]:
-                    hashcat_api.upload_mask(mask["name"], open(mask["path"], 'rb').read())
+                if mask["name"] in missing.get("masks", []):
+                    with open(mask["path"], 'rb') as fh:
+                        hashcat_api.upload_mask(mask["name"], fh.read())
 
             for wordlist in wordlist_list:
-                if not wordlist["name"] in node_data["wordlists"]:
-                    hashcat_api.upload_wordlist(wordlist["name"], open(wordlist["path"], 'rb').read())
-                elif node_data["wordlists"][wordlist["name"]]["md5"] != wordlist["md5"]:
-                    hashcat_api.upload_wordlist(wordlist["name"], open(wordlist["path"], 'rb').read())
+                if wordlist["name"] in missing.get("wordlists", []):
+                    with open(wordlist["path"], 'rb') as fh:
+                        hashcat_api.upload_wordlist(wordlist["name"], fh)
+            # After sync, redirect to GET to avoid stale context and show fresh data
+            return redirect('Nodes:node', node_name=node_name)
 
     try:
         hashcat_api = HashcatAPI(node_item.hostname, node_item.port, node_item.username, node_item.password)
@@ -121,6 +161,7 @@ def node(request, node_name, error_msg=""):
     hash_type_list = sorted(node_data["hash_types"], key=itemgetter('id'))
 
     context["version"] = node_data["version"]
+    context["system"] = node_data.get("system", {})
     context["rule_list"] = rule_list
     context["mask_list"] = mask_list
     context["wordlist_list"] = wordlist_list

@@ -10,12 +10,15 @@ import humanize
 from Nodes.models import Node
 from Utils.hashcat import Hashcat
 from Utils.hashcatAPI import HashcatAPI, HashcatAPIError
+from Utils.hashcat_cache import HashcatSnapshotCache
+from Utils.session_snapshot import SessionSnapshot
 from Utils.tasks import import_hashfile_task, run_search_task
 from Utils.utils import Echo
 from Utils.utils import init_hashfile_locks
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
+from django.db.models import Sum
 from django.http import FileResponse
 from django.http import Http404
 from django.http import HttpResponse
@@ -41,9 +44,95 @@ def _available_hash_types():
 
 @login_required
 def dashboard(request):
-    context = {}
-    context["Section"] = "Dashboard"
+    context = {"Section": "Dashboard"}
 
+    # Prefetch stats and snapshots to avoid empty dashboard on first load
+    if request.user.is_staff:
+        count_lines = Hashfile.objects.aggregate(Sum('line_count'))["line_count__sum"]
+        count_cracked = Hashfile.objects.aggregate(Sum('cracked_count'))["cracked_count__sum"]
+        session_list = Session.objects.select_related("hashfile", "node").all()
+    else:
+        count_lines = Hashfile.objects.filter(owner=request.user).aggregate(Sum('line_count'))["line_count__sum"]
+        count_cracked = Hashfile.objects.filter(owner=request.user).aggregate(Sum('cracked_count'))["cracked_count__sum"]
+        session_list = Session.objects.select_related("hashfile", "node").filter(hashfile__owner=request.user)
+
+    count_cracked = count_cracked or 0
+    stats_rows = []
+    if count_lines is None:
+        stats_rows.append({"label": "<b>Lines</b>", "value": humanize.intcomma(0)})
+        stats_rows.append({"label": "<b>Cracked</b>", "value": "%s (%.2f%%)" % (humanize.intcomma(count_cracked), 0)})
+    else:
+        stats_rows.append({"label": "<b>Lines</b>", "value": humanize.intcomma(count_lines)})
+        stats_rows.append({"label": "<b>Cracked</b>", "value": "%s (%.2f%%)" % (humanize.intcomma(count_cracked),
+                                                              count_cracked / count_lines * 100.0 if count_lines != 0 else 0.0)})
+    stats_rows.append({"label": "<b>Hashfiles</b>", "value": Hashfile.objects.count()})
+    stats_rows.append({"label": "<b>Nodes</b>", "value": Node.objects.count()})
+
+    cracked_data = []
+    if count_lines:
+        cracked_data = [
+            ["Cracked", count_cracked],
+            ["Uncracked", count_lines - count_cracked],
+        ]
+
+    cache = HashcatSnapshotCache()
+    snapshot = cache.get_snapshot()
+    metadata = cache.get_metadata(snapshot)
+    node_snapshots = snapshot.get("nodes", {}) if snapshot else {}
+    session_snapshots = snapshot.get("sessions", {}) if snapshot else {}
+
+    nodes_prefetch = []
+    for node_id, node_data in node_snapshots.items():
+        nodes_prefetch.append({
+            "name": node_data.get("name") or node_id,
+            "status": node_data.get("status") or "",
+        })
+
+    running_prefetch = []
+    error_prefetch = []
+    healthy_statuses = {"Not started", "Running", "Paused", "Done"}
+    for session in session_list:
+        cached = session_snapshots.get(session.name)
+        node_name = cached.get("node_name") if cached else session.node.name
+
+        if cached is None:
+            # Node data unavailable
+            error_prefetch.append({
+                "hashfile": session.hashfile.name,
+                "node": session.node.name,
+                "type": "",
+                "rule_mask": "",
+                "wordlist": "",
+                "status": "Node data unavailable",
+                "reason": "",
+            })
+            continue
+
+        if cached.get("response") == "error":
+            snapshot_obj = SessionSnapshot.from_error(session.name, node_name, session.node.id,
+                                                      cached.get("reason") or cached.get("error") or "")
+            error_prefetch.append(snapshot_obj.as_error_row(session.hashfile.name,
+                                                            status_override="Inexistant session on node"))
+            continue
+
+        status_value = cached.get("status")
+        snapshot_obj = SessionSnapshot.from_api_response(session.name, node_name, session.node.id, cached)
+        if status_value == "Running":
+            running_prefetch.append(snapshot_obj.as_running_row(session.hashfile.name))
+        elif status_value not in healthy_statuses:
+            error_prefetch.append(snapshot_obj.as_error_row(session.hashfile.name,
+                                                            status_override=status_value or "Unknown"))
+
+    context["prefetch"] = {
+        "stats": stats_rows,
+        "cracked": cracked_data,
+        "nodes": nodes_prefetch,
+        "running": running_prefetch,
+        "errors": error_prefetch,
+        "metadata": metadata,
+    }
+    # Serialize prefetch to JSON so it can be injected safely into JavaScript
+    context["prefetch_json"] = json.dumps(context["prefetch"])
     template = loader.get_template('Hashcat/dashboard.html')
     return HttpResponse(template.render(context, request))
 
@@ -177,10 +266,10 @@ def files(request):
             elif request.POST["filetype"] == "wordlist":
                 Hashcat.remove_wordlist(request.POST["filename"])
 
-    # Use non-detailed listings to avoid expensive md5/line counting on large datasets
-    context["rule_list"] = Hashcat.get_rules(detailed=False)
-    context["mask_list"] = Hashcat.get_masks(detailed=False)
-    context["wordlist_list"] = Hashcat.get_wordlists(detailed=False)
+    # Detailed listings rely on cached metadata and are inexpensive after first run
+    context["rule_list"] = Hashcat.get_rules(detailed=True)
+    context["mask_list"] = Hashcat.get_masks(detailed=True)
+    context["wordlist_list"] = Hashcat.get_wordlists(detailed=True)
 
     template = loader.get_template('Hashcat/files.html')
     return HttpResponse(template.render(context, request))
@@ -224,6 +313,12 @@ def new_session(request):
             hashcat_debug_file = False
 
         try:
+            Hashcat.ensure_hashfile_exists(hashfile)
+        except FileNotFoundError:
+            messages.error(request, "Hashfile content is missing on disk; please re-import the hashfile before starting a session.")
+            return redirect('Hashcat:hashfiles')
+
+        try:
             hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
             if crack_type == "dictionary":
                 res = hashcat_api.create_dictionary_session(session_name, hashfile, rule, wordlist, device_type,
@@ -256,15 +351,14 @@ def new_session(request):
 @staff_member_required
 def upload_rule(request):
     if request.method == 'POST':
-        name = request.POST["name"]
-
-        if "file" in request.FILES:
-            # get from file
-            f = request.FILES["file"]
-            rule_file = f.read()
-
-            Hashcat.upload_rule(name, rule_file)
-
+        files = request.FILES.getlist("file")
+        for f in files:
+            name = f.name
+            lower = name.lower()
+            if not lower.endswith((".rule", ".txt")):
+                messages.error(request, f"Invalid rule extension for {name}. Allowed: .rule, .txt")
+                continue
+            Hashcat.upload_rule(name, f.read())
     return redirect('Hashcat:files')
 
 
@@ -272,15 +366,14 @@ def upload_rule(request):
 @staff_member_required
 def upload_mask(request):
     if request.method == 'POST':
-        name = request.POST["name"]
-
-        if "file" in request.FILES:
-            # get from file
-            f = request.FILES["file"]
-            mask_file = f.read()
-
-            Hashcat.upload_mask(name, mask_file)
-
+        files = request.FILES.getlist("file")
+        for f in files:
+            name = f.name
+            lower = name.lower()
+            if not lower.endswith((".hcmask", ".txt")):
+                messages.error(request, f"Invalid mask extension for {name}. Allowed: .hcmask, .txt")
+                continue
+            Hashcat.upload_mask(name, f.read())
     return redirect('Hashcat:files')
 
 
@@ -288,24 +381,29 @@ def upload_mask(request):
 @staff_member_required
 def upload_wordlist(request):
     if request.method == 'POST':
-        name = request.POST["name"]
+        files = request.FILES.getlist("file")
+        allowed_ext = (".gz", ".zip", ".wordlist", ".txt", ".list")
+        ext_candidates = [".gz", ".zip"]
+        for f in files:
+            name = f.name.replace(" ", "_")
+            lower = name.lower()
+            if not lower.endswith(allowed_ext):
+                messages.error(request, f"Invalid wordlist extension for {name}. Allowed: .txt, .list, .wordlist, .zip, .gz")
+                continue
+            base = name
+            ext = ""
+            for cand in ext_candidates:
+                if name.endswith(cand):
+                    base = name[: -len(cand)]
+                    ext = cand
+                    break
+            else:
+                base, _ = os.path.splitext(name)
 
-        if "file" in request.FILES:
-            # get from file
-            f = request.FILES["file"]
-            wordlist_file = f.read()
-
-            # If the user did not provide an explicit compressed extension, inherit it from the uploaded file
-            original_name = f.name
-            ext_candidates = [".tar.gz", ".gz", ".zip"]
-            if not any(name.endswith(ext) for ext in ext_candidates + [".wordlist"]):
-                for ext in ext_candidates:
-                    if original_name.endswith(ext):
-                        name = f"{name}{ext}"
-                        break
-
-            Hashcat.upload_wordlist(name, wordlist_file)
-
+            if not base.endswith(".wordlist"):
+                base = f"{base}.wordlist"
+            final_name = base + ext
+            Hashcat.upload_wordlist(final_name, f.read())
     return redirect('Hashcat:files')
 
 

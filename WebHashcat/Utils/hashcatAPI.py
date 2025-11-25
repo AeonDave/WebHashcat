@@ -152,6 +152,9 @@ class HashcatAPI(object):
 
         return self.send("/uploadRule", data=payload)
 
+    def delete_rule(self, name):
+        return self.send("/deleteRule", data={"name": name})
+
     def upload_mask(self, name, mask_file):
         payload = {
             "name": name,
@@ -160,13 +163,48 @@ class HashcatAPI(object):
 
         return self.send("/uploadMask", data=payload)
 
+    def delete_mask(self, name):
+        return self.send("/deleteMask", data={"name": name})
+
     def upload_wordlist(self, name, wordlist_file):
+        headers = self._headers()
+        # If a file-like is provided, stream as raw octet-stream with query param (no multipart parsing server-side).
+        if hasattr(wordlist_file, "read"):
+            headers["Content-Type"] = "application/octet-stream"
+            response = self._perform_request(
+                "POST",
+                "/uploadWordlist",
+                headers=headers,
+                params={"name": name},
+                data=wordlist_file,
+                timeout=(5, None),
+            )
+            return self._parse_json(response)
+        # If a path is provided, open and stream
+        if isinstance(wordlist_file, str):
+            with open(wordlist_file, "rb") as fh:
+                headers["Content-Type"] = "application/octet-stream"
+                response = self._perform_request(
+                    "POST",
+                    "/uploadWordlist",
+                    headers=headers,
+                    params={"name": name},
+                    data=fh,
+                    timeout=(5, None),
+                )
+                return self._parse_json(response)
+        # Fallback to base64 for raw bytes
         payload = {
             "name": name,
             "wordlists": base64.b64encode(wordlist_file).decode(),
         }
-
         return self.send("/uploadWordlist", data=payload)
+
+    def delete_wordlist(self, name):
+        return self.send("/deleteWordlist", data={"name": name})
+
+    def compare_assets(self, manifest: dict):
+        return self.send("/compareAssets", data=manifest)
 
     def _build_url(self, path: str) -> str:
         return "https://%s:%d%s" % (self.ip, self.port, path)

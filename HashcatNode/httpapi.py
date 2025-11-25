@@ -8,7 +8,8 @@ import string
 import traceback
 from pathlib import Path
 
-from flask import Flask, request
+from flask import Flask, request, make_response, jsonify
+import os
 from flask_compress import Compress
 from flask_httpauth import HTTPBasicAuth
 
@@ -61,6 +62,10 @@ class Server:
         self._app.add_url_rule("/uploadRule", "uploadRule", self._upload_rule, methods=["POST"])
         self._app.add_url_rule("/uploadMask", "uploadMask", self._upload_mask, methods=["POST"])
         self._app.add_url_rule("/uploadWordlist", "uploadWordlist", self._upload_wordlist, methods=["POST"])
+        self._app.add_url_rule("/deleteRule", "deleteRule", self._delete_rule, methods=["POST"])
+        self._app.add_url_rule("/deleteMask", "deleteMask", self._delete_mask, methods=["POST"])
+        self._app.add_url_rule("/deleteWordlist", "deleteWordlist", self._delete_wordlist, methods=["POST"])
+        self._app.add_url_rule("/compareAssets", "compareAssets", self._compare_assets, methods=["POST"])
 
     def start_server(self):
         context = (self._cert_path, self._key_path)
@@ -102,6 +107,7 @@ class Server:
             result = {
                 "response": "ok",
                 "version": Hashcat.version,
+                "system": Hashcat.get_system_info(),
                 "hash_types": hash_types,
                 "rules": rules,
                 "masks": masks,
@@ -390,6 +396,93 @@ class Server:
                 "message": str(e),
             })
 
+    @auth.login_required
+    def _delete_rule(self):
+        try:
+            data = request.get_json(force=True, silent=True) or request.form
+            name = data.get("name")
+            if not name:
+                raise ValueError("Missing rule name")
+            Hashcat.remove_rule(name)
+            return json.dumps({"response": "ok"})
+        except Exception as e:
+            traceback.print_exc()
+            return json.dumps({"response": "error", "message": str(e)})
+
+    @auth.login_required
+    def _delete_mask(self):
+        try:
+            data = request.get_json(force=True, silent=True) or request.form
+            name = data.get("name")
+            if not name:
+                raise ValueError("Missing mask name")
+            Hashcat.remove_mask(name)
+            return json.dumps({"response": "ok"})
+        except Exception as e:
+            traceback.print_exc()
+            return json.dumps({"response": "error", "message": str(e)})
+
+    @auth.login_required
+    def _delete_wordlist(self):
+        try:
+            data = request.get_json(force=True, silent=True) or request.form
+            name = data.get("name")
+            if not name:
+                raise ValueError("Missing wordlist name")
+            Hashcat.remove_wordlist(name)
+            return json.dumps({"response": "ok"})
+        except Exception as e:
+            traceback.print_exc()
+            return json.dumps({"response": "error", "message": str(e)})
+
+    @auth.login_required
+    def _compare_assets(self):
+        """
+        Compare provided manifest {rules:{name:md5}, masks:{...}, wordlists:{...}}
+        Deletes remote assets not present in the manifest.
+        Returns lists of items needing upload (missing or md5 mismatch).
+        """
+        try:
+            manifest = request.get_json(force=True, silent=True) or {}
+            missing = {"rules": [], "masks": [], "wordlists": []}
+
+            # Rules
+            remote_rules = Hashcat.rules
+            local_rules = manifest.get("rules", {})
+            for name, md5 in local_rules.items():
+                if name not in remote_rules or remote_rules[name].get("md5") != md5:
+                    missing["rules"].append(name)
+            for extra in set(remote_rules.keys()) - set(local_rules.keys()):
+                Hashcat.remove_rule(extra)
+
+            # Masks
+            remote_masks = Hashcat.masks
+            local_masks = manifest.get("masks", {})
+            for name, md5 in local_masks.items():
+                if name not in remote_masks or remote_masks[name].get("md5") != md5:
+                    missing["masks"].append(name)
+            remote_mask_names = set(remote_masks.keys())
+            for extra in set(os.listdir(Hashcat.mask_dir)) - set(local_masks.keys()):
+                if extra == ".gitkeep":
+                    continue
+                Hashcat.remove_mask(extra)
+
+            # Wordlists
+            remote_wordlists = Hashcat.wordlists
+            local_wordlists = manifest.get("wordlists", {})
+            for name, md5 in local_wordlists.items():
+                if name not in remote_wordlists or remote_wordlists[name].get("md5") != md5:
+                    missing["wordlists"].append(name)
+            for extra in set(os.listdir(Hashcat.wordlist_dir)) - set(local_wordlists.keys()):
+                if extra == ".gitkeep":
+                    continue
+                Hashcat.remove_wordlist(extra)
+
+            return json.dumps({"response": "ok", "missing": missing})
+        except Exception as e:
+            traceback.print_exc()
+            return json.dumps({"response": "error", "message": str(e)})
+
     """
         Upload a new wordlist file
         Parameters are:
@@ -400,17 +493,74 @@ class Server:
     @auth.login_required
     def _upload_wordlist(self):
         try:
-            data = json.loads(request.data.decode())
-
-            Hashcat.upload_wordlist(data["name"], base64.b64decode(data["wordlists"]))
+            allowed_ext = (".wordlist", ".gz", ".zip", ".txt", ".list")
+            # Raw stream upload (preferred for very large files)
+            if request.mimetype == "application/octet-stream":
+                name = request.args.get("name") or request.form.get("name")
+                if not name:
+                    raise ValueError("Missing name for raw upload")
+                if not name.lower().endswith(allowed_ext):
+                    raise ValueError("Invalid wordlist extension")
+                Hashcat.upload_wordlist_stream(name, request.stream)
+            else:
+                payload = self._parse_upload_payload(request, "wordlists")
+                if isinstance(payload, tuple) and hasattr(payload[1], "read"):
+                    name, file_obj = payload
+                    if not name.lower().endswith(allowed_ext):
+                        raise ValueError("Invalid wordlist extension")
+                    Hashcat.upload_wordlist_stream(name, file_obj)
+                elif isinstance(payload, tuple):
+                    name, raw_bytes = payload
+                    if not name.lower().endswith(allowed_ext):
+                        raise ValueError("Invalid wordlist extension")
+                    Hashcat.upload_wordlist(name, raw_bytes)
+                else:
+                    raise ValueError("Invalid payload for wordlist upload")
 
             res = {"response": "ok"}
-
-            return json.dumps(res)
+            response = make_response(jsonify(res))
+            if name.endswith((".gz", ".zip", ".7z")):
+                response.headers["Content-Encoding"] = "identity"
+            return response
         except Exception as e:
             traceback.print_exc()
 
-            return json.dumps({
+            response = make_response(json.dumps({
                 "response": "error",
                 "message": str(e),
-            })
+            }))
+            response.headers["Content-Encoding"] = "identity"
+            return response
+
+    def _parse_upload_payload(self, request_obj, field_name: str):
+        """
+        Accept both JSON (base64 encoded) and multipart form uploads.
+        Returns (name, bytes_payload) or (name, file_obj).
+        """
+        try:
+            data = request_obj.get_json(silent=True)
+        except Exception:
+            data = None
+
+        if data and field_name in data:
+            name = data.get("name")
+            payload_b64 = data.get(field_name)
+            return name, base64.b64decode(payload_b64)
+
+        # multipart/form-data
+        try:
+            if field_name in request_obj.files:
+                file_obj = request_obj.files[field_name]
+                name = request_obj.form.get("name", file_obj.filename)
+                file_obj.stream.seek(0)
+                return name, file_obj
+        except werkzeug.exceptions.ClientDisconnected as exc:
+            raise exc
+
+        # Fallback to raw body decoding
+        if request_obj.data:
+            raw = json.loads(request_obj.data.decode())
+            name = raw.get("name")
+            return name, base64.b64decode(raw[field_name])
+
+        raise ValueError("No upload payload provided")

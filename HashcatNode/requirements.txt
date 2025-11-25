@@ -1,4 +1,4 @@
 flask
 Flask-HTTPAuth
-peewee
 flask-compress
+peewee
