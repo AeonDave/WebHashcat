@@ -106,3 +106,4 @@ celerybeat-schedule
 .DS_Store
 node_modules/
 .github/
+todo.md

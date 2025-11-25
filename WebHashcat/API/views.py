@@ -323,14 +323,6 @@ def api_hashfiles(request):
 
     data = []
     for hashfile in hashfile_list:
-        buttons = "<a href='%s'><button title='Export cracked results' class='btn btn-info btn-xs' ><span class='glyphicon glyphicon-download-alt'></span></button></a>" % reverse(
-            'Hashcat:export_cracked', args=(hashfile.id,))
-        buttons += "<button title='Create new cracking session' style='margin-left: 5px' class='btn btn-primary btn-xs' data-toggle='modal' data-target='#action_new' data-hashfile='%s' data-hashfile_id=%d ><span class='glyphicon glyphicon-plus'></span></button>" % (
-            hashfile.name, hashfile.id)
-        buttons += "<button title='Remove hashfile' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='hashfile_action(%d, \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (
-            hashfile.id, "remove")
-
-        buttons = "<div style='float: right'>%s</div>" % buttons
 
         running_session_count = 0
         total_session_count = Session.objects.filter(hashfile_id=hashfile.id).count()
@@ -345,23 +337,19 @@ def api_hashfiles(request):
             "DT_RowId": "row_%d" % hashfile.id,
             "name": "<a href='%s'>%s<a/>" % (reverse('Hashcat:hashfile', args=(hashfile.id,)), hashfile.name),
             "type": _hash_type_label(hashfile.hash_type),
+            "hash_type_id": hashfile.hash_type,
+            "hash_type_value": hashfile.hash_type,
             "line_count": humanize.intcomma(hashfile.line_count),
             "cracked": "%s (%.2f%%)" % (humanize.intcomma(hashfile.cracked_count),
                                         hashfile.cracked_count / hashfile.line_count * 100) if hashfile.line_count > 0 else "0",
             "username_included": "yes" if hashfile.username_included else "no",
             "sessions_count": "%d / %d" % (running_session_count, total_session_count),
-            "buttons": buttons,
         })
 
     result["data"] = data
 
     result["recordsTotal"] = records_total
     result["recordsFiltered"] = records_filtered
-
-    for query in connection.queries[-4:]:
-        print(query["sql"])
-        print(query["time"])
-
     result["cache"] = metadata
 
     return HttpResponse(json.dumps(result), content_type="application/json")
@@ -520,10 +508,6 @@ def api_hashfile_cracked(request, hashfile_id):
         else:
             data.append([cracked.hash, cracked.password])
 
-    for query in connection.queries[-3:]:
-        print(query["sql"])
-        print(query["time"])
-
     result["data"] = data
     result["recordsTotal"] = total_count
     result["recordsFiltered"] = filtered_count
@@ -557,10 +541,6 @@ def api_hashfile_top_password(request, hashfile_id, N):
         "top_password_list": top_password_list,
         "count_list": count_list,
     }
-
-    for query in connection.queries[-1:]:
-        print(query["sql"])
-        print(query["time"])
 
     return HttpResponse(json.dumps(res), content_type="application/json")
 
@@ -607,10 +587,6 @@ def api_hashfile_top_password_len(request, hashfile_id, N):
         "password_length_list": list(len_count.keys()),
         "count_list": list(len_count.values()),
     }
-
-    for query in connection.queries[-1:]:
-        print(query["sql"])
-        print(query["time"])
 
     return HttpResponse(json.dumps(res), content_type="application/json")
 
@@ -737,36 +713,34 @@ def api_search_list(request):
     else:
         search_list = Search.objects.filter(owner=request.user)
 
-    sort_index = ["name", "status", "output_lines"][int(params["order[0][column]"])]
-    sort_index = "-" + sort_index if params["order[0][dir]"] == "desc" else sort_index
-    search_list = search_list.filter(name__contains=params["search[value]"]).order_by(sort_index)[
-        int(params["start"]):int(params["start"]) + int(params["length"])]
+    sort_index = ["name", "status", "output_lines"][int(params.get("order[0][column]", 0))]
+    sort_index = "-" + sort_index if params.get("order[0][dir]") == "desc" else sort_index
+    filtered = search_list.filter(name__contains=params.get("search[value]", ""))
+    search_list = filtered.order_by(sort_index)[int(params.get("start", 0)):int(params.get("start", 0)) + int(params.get("length", 10))]
 
     data = []
     for search in search_list:
-        buttons = ""
+        actions = []
         if os.path.exists(search.output_file):
-            buttons = "<a href='%s'><button title='Export search results' class='btn btn-info btn-xs' ><span class='glyphicon glyphicon-download-alt'></span></button></a>" % reverse(
-                'Hashcat:export_search', args=(search.id,))
+            actions.append("<button class='px-2 py-1 text-xs rounded bg-emerald-900/40 border border-emerald-700 text-emerald-200' data-search-action='view' data-search-id='%d'>View</button>" % search.id)
+            actions.append("<a href='%s'><button class='px-2 py-1 text-xs rounded bg-primary/20 border border-primary/40 text-primary'>Download</button></a>" % reverse(
+                'Hashcat:export_search', args=(search.id,)))
         if search.status in ["Done", "Aborted", "Error"]:
-            buttons += "<button title='Restart search' style='margin-left: 5px' type='button' class='btn btn-primary btn-xs' onClick='search_action(%d, \"%s\")'><span class='glyphicon glyphicon-refresh'></span></button>" % (
-                search.id, "reload")
-            buttons += "<button title='Remove search' style='margin-left: 5px' type='button' class='btn btn-danger btn-xs' onClick='search_action(%d, \"%s\")'><span class='glyphicon glyphicon-remove'></span></button>" % (
-                search.id, "remove")
+            actions.append("<button class='px-2 py-1 text-xs rounded bg-sky-900/40 border border-sky-700 text-sky-100' data-search-action='reload' data-search-id='%d'>Restart</button>" % search.id)
+            actions.append("<button class='px-2 py-1 text-xs rounded bg-red-900/40 border border-red-700 text-red-200' data-search-action='remove' data-search-id='%d'>Delete</button>" % search.id)
+        actions_html = "<div class='flex gap-2 justify-end'>" + "".join(actions) + "</div>"
 
-        buttons = "<div style='float: right'>%s</div>" % buttons
-
-        data.append([
-            search.name,
-            search.status,
-            humanize.intcomma(search.output_lines) if search.output_lines != None else "",
-            str(datetime.timedelta(seconds=search.processing_time)) if search.processing_time != None else "",
-            buttons,
-        ])
+        data.append({
+            "name": search.name,
+            "status": search.status,
+            "lines": humanize.intcomma(search.output_lines) if search.output_lines is not None else "",
+            "processing_time": str(datetime.timedelta(seconds=search.processing_time)) if search.processing_time is not None else "",
+            "actions": actions_html,
+        })
 
     result["data"] = data
     result["recordsTotal"] = Search.objects.all().count()
-    result["recordsFiltered"] = Search.objects.filter(name__contains=params["search[value]"]).count()
+    result["recordsFiltered"] = filtered.count()
 
     return HttpResponse(json.dumps(result), content_type="application/json")
 
@@ -783,12 +757,25 @@ def api_search_action(request):
     if search.owner != request.user and not request.user.is_staff:
         raise Http404("You do not have permission to view this object.")
 
-    if params["action"] == "remove":
+    action = params.get("action")
+    if action == "remove":
         if os.path.exists(search.output_file):
             os.remove(search.output_file)
         search.delete()
-    elif params["action"] == "reload":
+    elif action == "reload":
         run_search_task.delay(search.id)
+    elif action == "view":
+        if not os.path.exists(search.output_file):
+            return HttpResponse(json.dumps({"result": "error", "message": "No results file found"}), content_type="application/json")
+        # Limit content size to avoid huge responses
+        try:
+            with open(search.output_file, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+            if len(content) > 200000:
+                content = content[:200000] + "\n... (truncated)"
+            return HttpResponse(json.dumps({"result": "success", "content": content}), content_type="application/json")
+        except OSError as exc:
+            return HttpResponse(json.dumps({"result": "error", "message": str(exc)}), content_type="application/json")
 
     return HttpResponse(json.dumps({"result": "success"}), content_type="application/json")
 

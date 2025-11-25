@@ -206,6 +206,13 @@ def remove_hashfile_task(hashfile_id):
 
     try:
         Hashcat.remove_hashfile(hashfile)
+        # Also remove the hashfile from all nodes
+        for node in Node.objects.all():
+            try:
+                api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+                api.delete_hashfile(hashfile.hashfile)
+            except Exception as exc:
+                logger.warning("Failed to delete hashfile %s from node %s: %s", hashfile.name, node.name, exc)
     except Exception:
         logger.exception("Failed to remove hashfile %s", hashfile.name)
         return {"error": True}

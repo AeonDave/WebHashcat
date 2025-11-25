@@ -113,7 +113,7 @@
               </select>
             </label>
             <label class="block text-sm">Hash type
-              <select name="hash_type" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+              <select id="hash_type_dict" name="hash_type" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
                 {% for hash_type in hash_type_list %}
                 <option value="{{ hash_type.id }}">{{ hash_type.name }}</option>
                 {% endfor %}
@@ -141,6 +141,9 @@
                 <option value="2">Send attack positions</option>
                 <option value="3">Send hashed passwords and attack positions</option>
               </select>
+              <p class="text-xs text-gray-400 mt-1">
+                  To distribute the load across multiple nodes, configure all nodes to use the same brain server in `HashcatNode/settings.ini` and start multiple sessions on the same hashfile with Brain enabled.
+              </p>
             </label>
             <label class="block text-sm">End date (optional)
               <input type="text" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1" name="end_datetime" id="end_dict">
@@ -194,6 +197,11 @@
               <div class="relative w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/60 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
               <span class="ms-3 text-sm text-gray-200">Save hashcat output file for debug</span>
             </label>
+            <label class="inline-flex items-center cursor-pointer mt-2">
+              <input type="checkbox" name="kernel_optimized" value="1" class="sr-only peer">
+              <div class="relative w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/60 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+              <span class="ms-3 text-sm text-gray-200">Add kernel optimization (-O, limits password length)</span>
+            </label>
             <div class="md:col-span-2 flex justify-end gap-2 mt-2">
               <button type="button" data-modal-hide="action_new" class="px-3 py-1.5 rounded border border-gray-700 text-gray-300">Cancel</button>
               <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Create session</button>
@@ -201,7 +209,8 @@
           </form>
         </div>
       </div>
-
+    </div>
+  </div>
 </div>
 
 <script src="{% static 'js/cache.js' %}"></script>

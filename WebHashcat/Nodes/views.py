@@ -9,6 +9,7 @@ from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.template import loader
 
+from Hashcat.models import Hashfile
 from .models import Node
 
 @login_required
@@ -90,10 +91,12 @@ def node(request, node_name, error_msg=""):
                 rule_list = Hashcat.get_rules()
                 mask_list = Hashcat.get_masks()
                 wordlist_list = Hashcat.get_wordlists()
+                hashfile_names = list(Hashfile.objects.values_list("hashfile", flat=True))
                 manifest = {
                     "rules": {r["name"]: r.get("md5") for r in rule_list},
                     "masks": {m["name"]: m.get("md5") for m in mask_list},
                     "wordlists": {w["name"]: w.get("md5") for w in wordlist_list},
+                    "hashfiles": hashfile_names,
                 }
                 compare_res = hashcat_api.compare_assets(manifest)
             except HashcatAPIError as exc:

@@ -1,22 +1,24 @@
-#!/usr/bin/python3
 import base64
 import hashlib
 import json
 import logging
+import os
 import random
 import string
 import traceback
 from pathlib import Path
 
 from flask import Flask, request, make_response, jsonify
-import os
 from flask_compress import Compress
 from flask_httpauth import HTTPBasicAuth
 
 try:  # Support package-relative imports when HashcatNode is a module
     from .hashcat import Hashcat  # type: ignore
 except ImportError:  # pragma: no cover - fallback for direct execution
-    from hashcat import Hashcat
+    try:
+        from HashcatNode.hashcat import Hashcat  # type: ignore
+    except ImportError:
+        from hashcat import Hashcat
 
 auth = HTTPBasicAuth()
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +30,7 @@ def verify_password(username, password):
     global httpauth_hash
     if username == httpauth_user and httpauth_hash == hashlib.sha256(password.encode()).hexdigest():
         return username
+    return None
 
 
 class Server:
@@ -65,6 +68,7 @@ class Server:
         self._app.add_url_rule("/deleteRule", "deleteRule", self._delete_rule, methods=["POST"])
         self._app.add_url_rule("/deleteMask", "deleteMask", self._delete_mask, methods=["POST"])
         self._app.add_url_rule("/deleteWordlist", "deleteWordlist", self._delete_wordlist, methods=["POST"])
+        self._app.add_url_rule("/deleteHashfile", "deleteHashfile", self._delete_hashfile, methods=["POST"])
         self._app.add_url_rule("/compareAssets", "compareAssets", self._compare_assets, methods=["POST"])
 
     def start_server(self):
@@ -277,6 +281,7 @@ class Server:
                 int(data["brain_mode"]),
                 int(data["end_timestamp"]) if data["end_timestamp"] != None else None,
                 data["hashcat_debug_file"],
+                str(data.get("kernel_optimized", "")).lower() in {"true", "1", "on", "yes"},
             )
 
             res = {"response": "ok"}
@@ -436,15 +441,28 @@ class Server:
             return json.dumps({"response": "error", "message": str(e)})
 
     @auth.login_required
+    def _delete_hashfile(self):
+        try:
+            data = request.get_json(force=True, silent=True) or request.form
+            name = data.get("name")
+            if not name:
+                raise ValueError("Missing hashfile name")
+            Hashcat.remove_hashfile(name)
+            return json.dumps({"response": "ok"})
+        except Exception as e:
+            traceback.print_exc()
+            return json.dumps({"response": "error", "message": str(e)})
+
+    @auth.login_required
     def _compare_assets(self):
         """
-        Compare provided manifest {rules:{name:md5}, masks:{...}, wordlists:{...}}
+        Compare provided manifest {rules:{name:md5}, masks:{...}, wordlists:{...}, hashfiles:[...]}
         Deletes remote assets not present in the manifest.
         Returns lists of items needing upload (missing or md5 mismatch).
         """
         try:
             manifest = request.get_json(force=True, silent=True) or {}
-            missing = {"rules": [], "masks": [], "wordlists": []}
+            missing = {"rules": [], "masks": [], "wordlists": [], "hashfiles": []}
 
             # Rules
             remote_rules = Hashcat.rules
@@ -477,6 +495,20 @@ class Server:
                 if extra == ".gitkeep":
                     continue
                 Hashcat.remove_wordlist(extra)
+
+            # Hashfiles: only prune extras based on manifest names
+            local_hashfiles = set(manifest.get("hashfiles", []))
+            try:
+                remote_hashfiles = set(os.listdir(Hashcat.hash_dir))
+            except Exception:
+                remote_hashfiles = set()
+            for extra in remote_hashfiles - local_hashfiles:
+                if extra == ".gitkeep":
+                    continue
+                Hashcat.remove_hashfile(extra)
+            for name in local_hashfiles:
+                if name not in remote_hashfiles:
+                    missing["hashfiles"].append(name)
 
             return json.dumps({"response": "ok", "missing": missing})
         except Exception as e:

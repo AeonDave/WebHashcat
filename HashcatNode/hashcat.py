@@ -67,6 +67,7 @@ class Hashcat(object):
     rules_dir: str = ""
     mask_dir: str = ""
     wordlist_dir: str = ""
+    hash_dir: str = ""
     version: str = ""
     system_info: Dict[str, Any] = {}
     hash_modes: Dict[int, Dict[str, str]] = {}
@@ -543,6 +544,34 @@ class Hashcat(object):
             pass
         # refresh inventory
         self.parse_wordlists()
+
+    @classmethod
+    def remove_hashfile(self, name):
+        name = name.split("/")[-1]
+        path = os.path.join(self.hash_dir, name)
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        # Clean up any sessions tied to this hashfile (including pot/output files)
+        try:
+            for session in Session.select().where(Session.hash_file == name):
+                if session.pot_file and os.path.exists(session.pot_file):
+                    try:
+                        os.remove(session.pot_file)
+                    except Exception:
+                        pass
+                if session.output_file and os.path.exists(session.output_file):
+                    try:
+                        os.remove(session.output_file)
+                    except Exception:
+                        pass
+                # Drop from in-memory map if present
+                if session.name in self.sessions:
+                    self.sessions.pop(session.name, None)
+                session.delete_instance()
+        except Exception:
+            pass
 
     @classmethod
     def upload_wordlist_stream(self, name, file_obj):

@@ -186,7 +186,11 @@ class CacheBackedApiTests(TestCase):
         self.assertEqual(payload["recordsFiltered"], 1)
         self.assertEqual(len(payload["data"]), 1)
         row = payload["data"][0]
-        self.assertIn("glyphicon-download-alt", row["buttons"])
+        # La tabella hashfiles usa ora pulsanti renderizzati lato frontend, quindi
+        # l'API non espone più HTML legacy in una colonna "buttons".
+        # Verifichiamo invece che i campi strutturali e la cache siano corretti.
+        self.assertEqual(row["DT_RowId"], f"row_{hashfile_a.id}")
+        self.assertIn("alpha-list", row["name"])
         self.assertEqual(row["sessions_count"], "1 / 1")
         self.assertEqual(payload["cache"], metadata)
 
@@ -287,7 +291,8 @@ class CacheBackedApiTests(TestCase):
 
         row = payload["data"][0]
         self.assertEqual(row["status"], "Running")
-        self.assertIn("glyphicon-pause", row["buttons"])
+        # I controlli di sessione usano ora pulsanti testuali moderni
+        self.assertIn("Pause", row["buttons"])
         self.assertEqual(row["progress"], "12 %")
         self.assertEqual(payload["cache"], metadata)
 
@@ -429,10 +434,16 @@ class CacheBackedApiTests(TestCase):
         self.assertEqual(payload["recordsTotal"], 2)
         self.assertEqual(payload["recordsFiltered"], 2)
         self.assertEqual(len(payload["data"]), 2)
-        names = [row[0] for row in payload["data"]]
+
+        # api_search_list now returns a list of objects with named columns
+        names = [row["name"] for row in payload["data"]]
         self.assertIn("Report One", names)
-        download_row = next(row for row in payload["data"] if row[0] == "Report One")
-        self.assertIn("glyphicon-download-alt", download_row[4])
+
+        download_row = next(row for row in payload["data"] if row["name"] == "Report One")
+        html_actions = download_row["actions"]
+        # Ensure that the HTML includes both the view and download controls
+        self.assertIn("data-search-action='view'", html_actions)
+        self.assertIn("Download", html_actions)
 
 
 class SessionActionApiTests(TestCase):

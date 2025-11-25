@@ -48,6 +48,7 @@ class NodeSettings:
         Hashcat.rules_dir = self.rules_dir
         Hashcat.wordlist_dir = self.wordlist_dir
         Hashcat.mask_dir = self.mask_dir
+        Hashcat.hash_dir = self.hashes_dir
         Hashcat.workload_profile = self.workload_profile
         Hashcat.brain = {
             'enabled': self.brain_enabled,
@@ -204,7 +205,7 @@ def main(run_server: bool = True):
     Hashcat.reload_sessions()
 
     if run_server:
-        httpsServer = Server(
+        https_server = Server(
             settings.bind_address,
             settings.bind_port,
             settings.username,
@@ -213,7 +214,7 @@ def main(run_server: bool = True):
             settings.cert_file,
             settings.key_file,
         )
-        httpsServer.start_server()
+        https_server.start_server()
 
     return Hashcat
 

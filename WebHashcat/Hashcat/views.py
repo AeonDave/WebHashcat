@@ -327,13 +327,18 @@ def new_session(request):
                                                             brain_mode, end_timestamp, hashcat_debug_file, kernel_optimized)
             elif crack_type == "mask":
                 res = hashcat_api.create_mask_session(session_name, hashfile, mask, device_type, brain_mode,
-                                                      end_timestamp, hashcat_debug_file)
+                                                      end_timestamp, hashcat_debug_file, kernel_optimized)
+            else:
+                res = {"response": "error", "message": "Unsupported cracking type"}
         except HashcatAPIError as exc:
-            messages.error(request, f"Node {node_name} not accessible: {exc}")
+            detail = ""
+            if hasattr(exc, "body") and exc.body:
+                detail = f" (details: {exc.body[:200]})"
+            messages.error(request, f"Node {node_name} not accessible: {exc}{detail}")
             return redirect('Hashcat:hashfiles')
 
-        if res["response"] == "error":
-            messages.error(request, res["message"])
+        if not res or res.get("response") == "error":
+            messages.error(request, res.get("message", "Node rejected session"))
             return redirect('Hashcat:hashfiles')
 
         messages.success(request, "Session successfully created")

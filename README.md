@@ -101,6 +101,90 @@ Tip: Nodes on other machines do not need the shared Docker network. Just publish
 - From **Hashcat → Hashfiles**, click **Add** to import a new hashfile. Use the `+` button beside a hashfile to define a cracking session, then hit **Play** to start it.
 - Sessions stream progress back to the UI; Celery workers keep the potfile and cracked counts in sync.
 
+### 6. Using Hashcat Brain with multiple nodes
+
+WebHashcat exposes hashcat's **Brain** feature so you can coordinate work across several nodes that attack the **same hashfile**. Brain does **not** distribute keyspace by itself, but it tracks what each client has already tried and prevents duplicate work when multiple clients run the same attack.
+
+At a high level you need:
+
+1. A running **brain server** (native hashcat component).
+2. One or more **HashcatNode** instances configured to talk to that brain server.
+3. One or more **sessions** against the same hashfile and attack, each running on a different node with `brain_mode` set to a value other than `0`.
+
+#### 6.1 Start the brain server
+
+On any machine reachable from all your nodes (this can be the same host as a node or a separate box), start hashcat in brain-server mode, for example:
+
+```bash
+hashcat --brain-server \
+        --brain-host 0.0.0.0 \
+        --brain-port 13743 \
+        --brain-password superSecretBrainPw
+```
+
+Notes:
+
+- `--brain-host` should normally be `0.0.0.0` on the server so that remote nodes can connect, or a specific interface if you want to restrict it.
+- Ensure that the chosen `--brain-port` is reachable from every HashcatNode (firewall/NAT rules).
+- The `--brain-password` must match what you configure on every node.
+
+#### 6.2 Configure each node to use the shared brain server
+
+On every HashcatNode instance (Docker or bare-metal), edit `HashcatNode/settings.ini` and update the **[Brain]** section:
+
+```ini
+[Brain]
+enabled = true
+host = <brain_server_ip_or_hostname>
+port = 13743
+password = superSecretBrainPw
+```
+
+Keep the following points in mind:
+
+- All nodes that should share work **must point to the same host/port/password**.
+- `enabled` must be `true` (or `"true"` in the final config) or the node will ignore Brain entirely, even if sessions request it.
+- When you change `settings.ini`, restart the HashcatNode process or container so the new configuration is applied.
+
+#### 6.3 Run multiple nodes
+
+You can run several nodes on the same physical host (with different ports and/or GPUs) or on separate machines.
+
+- **Docker:** just start multiple node containers (possibly with different profiles) on different hosts, all attached to the same network and pointing to the shared brain server as above.
+- **Bare-metal:** install HashcatNode on each machine following the manual installation section and configure each one's `settings.ini` with the same Brain settings.
+
+In the Web UI, register each node under **Nodes → Add node** with:
+
+- the node's hostname or IP,
+- the HTTPS port (default `9999`),
+- the Basic Auth credentials configured via secrets/env on that node.
+
+Use **Synchronise** on each node page so rules, masks, and wordlists are available everywhere.
+
+#### 6.4 Create coordinated sessions with Brain
+
+Once the brain server and nodes are configured:
+
+1. Go to **Hashcat → Hashfiles** and import or select the hashfile you want to attack.
+2. Click the `+` button beside that hashfile to define a new session.
+3. In the **New session** modal:
+   - Choose the attack type (dictionary or mask) and parameters (rules, wordlists, masks) as usual.
+   - For **Node**, pick one of the registered nodes.
+   - For **Brain**, choose a mode other than `Disabled` (`Send hashed passwords`, `Send attack positions`, or `Send hashed passwords and attack positions`).
+4. Save the session.
+5. Repeat the same steps for the **same hashfile** and attack parameters, but select a **different node** each time (still with a non-zero Brain mode).
+6. Start all those sessions (from the hashfile detail view or the global sessions view).
+
+All running sessions that:
+
+- point to the same hashfile contents,
+- use the same attack configuration (same mask or rules/wordlist), and
+- have Brain enabled (`brain_mode` ≠ 0 and `[Brain].enabled = true` on the node),
+
+will connect to the shared brain server. The brain server tracks which keyspace regions have already been attempted and instructs each client to skip duplicates, effectively distributing work across your nodes.
+
+If you prefer to keep data more private, you can pick `Send attack positions` (mode 2), which only shares keyspace positions and not candidate hashes; mode 3 shares both and gives the most complete deduplication.
+
 Screenshots:
 
 <p style="text-align:center;"><img src="./screenshots/webhashcat_hashfile_list.png" alt="Hashfile list"></p>

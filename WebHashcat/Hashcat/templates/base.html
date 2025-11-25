@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% load static %}
 <html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
@@ -34,6 +35,8 @@
     <!-- Flatpickr for date/time -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <!-- Shared modal helpers (used by hashes.js, search.js, etc.) -->
+    <script src="{% static 'js/modals.js' %}"></script>
     <style>
       body { background: #0b1220; color: #e5e7eb; }
       .nav-link { display:block; padding:10px 12px; border-radius:8px; color:#9ca3af; font-weight:500; }
@@ -54,7 +57,7 @@
 </div>
 <div class="flex min-h-screen">
   <aside class="w-64 bg-[#0d1324] border-r border-gray-800 hidden md:flex flex-col">
-    <div class="px-6 py-6 text-2xl font-semibold tracking-tight text-primary">DHashcat</div>
+    <div class="px-6 py-6 text-2xl font-semibold tracking-tight text-primary">Dave Hashcat</div>
     <nav class="flex-1 px-4 space-y-1">
       <a href="{% url 'Hashcat:index' %}" class="nav-link {% if Section == 'Dashboard' %}active{% endif %}">Dashboard</a>
       <a href="{% url 'Hashcat:hashfiles' %}" class="nav-link {% if Section == 'Hashes' %}active{% endif %}">Hashes</a>

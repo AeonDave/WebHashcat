@@ -92,7 +92,7 @@ class HashcatAPI(object):
         return res
 
     def create_mask_session(self, session_name, hashfile, mask, device_type, brain_mode, end_timestamp,
-                            hashcat_debug_file):
+                            hashcat_debug_file, kernel_optimized=False):
         hashfile_path = os.path.join(os.path.dirname(__file__), "..", "Files", "Hashfiles", hashfile.hashfile)
 
         # lock
@@ -111,6 +111,7 @@ class HashcatAPI(object):
                 "brain_mode": brain_mode,
                 "end_timestamp": end_timestamp,
                 "hashcat_debug_file": hashcat_debug_file,
+                "kernel_optimized": kernel_optimized,
             }
 
             res = self.post_file("/createSession", payload, hashfile_path)
@@ -203,6 +204,9 @@ class HashcatAPI(object):
 
     def delete_wordlist(self, name):
         return self.send("/deleteWordlist", data={"name": name})
+
+    def delete_hashfile(self, name):
+        return self.send("/deleteHashfile", data={"name": name})
 
     def compare_assets(self, manifest: dict):
         return self.send("/compareAssets", data=manifest)

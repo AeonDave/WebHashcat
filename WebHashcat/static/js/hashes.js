@@ -41,11 +41,22 @@ document.addEventListener('DOMContentLoaded', () => {
       { title: "", data: null, orderable: false, className: "text-right", render: (data, type, row) => {
           const hid = parseId(row.DT_RowId);
           const plainName = (row.name || '').replace(/<[^>]*>/g, '');
+          // Prefer explicit null/undefined checks so that mode "0" (e.g. MD5) is preserved
+          let hashTypeId = row.hash_type_id;
+          if (hashTypeId === undefined || hashTypeId === null || hashTypeId === '') {
+            hashTypeId = row.hash_type_value;
+          }
+          if (hashTypeId === undefined || hashTypeId === null || hashTypeId === '') {
+            hashTypeId = row.hash_type;
+          }
+          if (hashTypeId === undefined || hashTypeId === null) {
+            hashTypeId = '';
+          }
           return `
             <div class="flex gap-2 justify-end">
               <a href="/file/cracked/${hid}"><button class="px-2 py-1 text-xs rounded bg-emerald-900/40 border border-emerald-700 text-emerald-200">Cracked</button></a>
               <a href="/file/uncracked/${hid}"><button class="px-2 py-1 text-xs rounded bg-amber-900/40 border border-amber-700 text-amber-200">Uncracked</button></a>
-              <button class="px-2 py-1 text-xs rounded bg-primary/20 border border-primary/40 text-primary" data-modal-target="action_new" data-modal-toggle="action_new" data-hashfile="${plainName}" data-hashfile_id="${hid}">New session</button>
+              <button class="px-2 py-1 text-xs rounded bg-primary/20 border border-primary/40 text-primary" data-modal-target="action_new" data-modal-toggle="action_new" data-hashfile="${plainName}" data-hashfile_id="${hid}" data-hash_type="${hashTypeId}">New session</button>
               <button class="px-2 py-1 text-xs rounded bg-red-900/40 border border-red-700 text-red-200" onClick="hashfile_action(${hid}, 'remove')">Remove</button>
             </div>`;
         } },
@@ -197,43 +208,17 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   $('#node_dict').on('change', () => updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict'));
   $('#node_mask').on('change', () => updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask'));
-  // Bind click on action buttons to open modal
-  function showModal(modalId) {
-    const modalEl = document.getElementById(modalId);
-    if (!modalEl) return;
-    // Flowbite 2.x exposes Modal globally; fall back to manual toggle.
-    const FBModal = window.Modal || (window.Flowbite ? window.Flowbite.Modal : null);
-    if (FBModal) {
-      const instance = FBModal.getInstance ? FBModal.getInstance(modalEl) : null;
-      (instance || new FBModal(modalEl)).show();
-    } else {
-      modalEl.classList.remove('hidden');
-      modalEl.classList.add('flex');
-    }
-  }
-  function hideModal(modalId) {
-    const modalEl = document.getElementById(modalId);
-    if (!modalEl) return;
-    const FBModal = window.Modal || (window.Flowbite ? window.Flowbite.Modal : null);
-    if (FBModal) {
-      const instance = FBModal.getInstance ? FBModal.getInstance(modalEl) : null;
-      (instance || new FBModal(modalEl)).hide();
-    } else {
-      modalEl.classList.add('hidden');
-      modalEl.classList.remove('flex');
-    }
-  }
-  // Global close buttons fallback when Flowbite data attributes are not processed.
-  document.querySelectorAll('[data-modal-hide]').forEach(btn => {
-    btn.addEventListener('click', () => hideModal(btn.getAttribute('data-modal-hide')));
-  });
-
   function openSessionModal(btn) {
     const hashfile_name = $(btn).data('hashfile') || '';
     const hashfile_id = $(btn).data('hashfile_id') || '';
+    const hash_type_id = $(btn).data('hash_type');
     $('#session_modal_title').text(`${hashfile_name}: New session`);
     $('#hashfile_id_dict').val(hashfile_id);
     $('#hashfile_id_mask').val(hashfile_id);
+    // Accetta anche mode 0 (MD5), quindi non usare un semplice controllo di truthiness
+    if (hash_type_id !== undefined && hash_type_id !== null && hash_type_id !== '') {
+      $('#hash_type_dict').val(String(hash_type_id));
+    }
     updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict');
     updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask');
     showModal('action_new');
