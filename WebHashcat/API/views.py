@@ -27,7 +27,7 @@ from Utils.hashcatAPI import HashcatAPI, HashcatAPIError
 from Utils.hashcat_cache import HashcatSnapshotCache
 from Utils.models import Task
 from Utils.session_snapshot import SessionSnapshot
-from Utils.tasks import import_hashfile_task, run_search_task
+from Utils.tasks import import_hashfile_task, run_search_task, logger
 from Utils.tasks import remove_hashfile_task
 from Utils.utils import init_hashfile_locks
 

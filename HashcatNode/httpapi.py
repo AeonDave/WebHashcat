@@ -554,7 +554,7 @@ class Server:
                 name = request_obj.form.get("name", file_obj.filename)
                 file_obj.stream.seek(0)
                 return name, file_obj
-        except werkzeug.exceptions.ClientDisconnected as exc:
+        except Exception as exc:
             raise exc
 
         # Fallback to raw body decoding
