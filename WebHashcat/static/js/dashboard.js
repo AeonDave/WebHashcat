@@ -2,37 +2,48 @@ document.addEventListener('DOMContentLoaded', () => {
   const cfg = window.dashboardConfig || {};
   const pre = (window.dashboardConfig || {}).prefetch || {};
 
-  var cracked_chart = new Highcharts.chart('cracked_graph', {
-    chart: {
-      height: '60%',
-      plotBackgroundColor: null,
-      plotBorderWidth: 0,
-      plotShadow: false,
-      margin: [0, 0, 0, 0],
-      spacingTop: 0, spacingBottom: 0, spacingLeft: 0, spacingRight: 0,
-      backgroundColor: 'transparent',
-    },
-    title: { text: '' },
-    tooltip: { pointFormat: '{series.name}: <b>{point.percentage:.1f}%</b>' },
-    plotOptions: {
-      pie: {
-        size: '175%',
-        dataLabels: {
-          enabled: true,
-          distance: -50,
-          style: { fontWeight: 'bold', color: 'white' }
-        },
-        startAngle: -90, endAngle: 90, center: ['50%', '95%'],
-        colors: ['#22d3ee', '#ef4444'],
-      }
-    },
-    credits: { enabled: false },
-    exporting: { enabled: false },
-    series: [{ type: 'pie', name: 'Cracked', innerSize: '50%', showInLegend: false, data: [] }]
-  });
-  cracked_chart.showLoading();
+  // Highcharts may fail to load (e.g. offline or blocked CDN). Guard against that so
+  // the rest of the dashboard (tables) still works even without the chart.
+  const hasHighcharts = window.Highcharts && typeof Highcharts.chart === 'function';
+  let cracked_chart = null;
+
+  if (hasHighcharts) {
+    // Highcharts.chart is a factory function, not a constructor: do NOT use "new" here.
+    cracked_chart = Highcharts.chart('cracked_graph', {
+      chart: {
+        height: '60%',
+        plotBackgroundColor: null,
+        plotBorderWidth: 0,
+        plotShadow: false,
+        margin: [0, 0, 0, 0],
+        spacingTop: 0, spacingBottom: 0, spacingLeft: 0, spacingRight: 0,
+        backgroundColor: 'transparent',
+      },
+      title: { text: '' },
+      tooltip: { pointFormat: '{series.name}: <b>{point.percentage:.1f}%</b>' },
+      plotOptions: {
+        pie: {
+          size: '175%',
+          dataLabels: {
+            enabled: true,
+            distance: -50,
+            style: { fontWeight: 'bold', color: 'white' }
+          },
+          startAngle: -90, endAngle: 90, center: ['50%', '95%'],
+          colors: ['#22d3ee', '#ef4444'],
+        }
+      },
+      credits: { enabled: false },
+      exporting: { enabled: false },
+      series: [{ type: 'pie', name: 'Cracked', innerSize: '50%', showInLegend: false, data: [] }]
+    });
+    cracked_chart.showLoading();
+  }
 
   function refresh_cracked_chart(initial) {
+    if (!hasHighcharts || !cracked_chart) {
+      return;
+    }
     if (initial && pre.cracked && pre.cracked.length) {
       cracked_chart.series[0].setData(pre.cracked);
       cracked_chart.hideLoading();
@@ -72,7 +83,10 @@ document.addEventListener('DOMContentLoaded', () => {
     paging: false,
     ordering: false,
     info: false,
-    data: pre.nodes && pre.nodes.length ? pre.nodes : undefined,
+    // Use the API as the single source of truth for node status to avoid
+    // duplicated rows when both prefetch and AJAX provide the same node.
+    // Prefetched node data is no longer used here.
+    data: undefined,
     ajax: { url: cfg.nodeStatusUrl, dataSrc: function (json) { return json.data || []; } },
     columns: [
       { title: "Name", data: "name" },

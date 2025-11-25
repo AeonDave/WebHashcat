@@ -291,7 +291,8 @@ def new_session(request):
 
         crack_type = request.POST["crack_type"]
         if crack_type == "dictionary":
-            rule = request.POST["rule"] if request.POST["rule"] != "None" else None
+            selected_rules = request.POST.getlist("rule")
+            rule = selected_rules if selected_rules else None
             wordlist = request.POST["wordlist"]
         elif crack_type == "mask":
             mask = request.POST["mask"]
@@ -311,6 +312,7 @@ def new_session(request):
             hashcat_debug_file = True
         else:
             hashcat_debug_file = False
+        kernel_optimized = "kernel_optimized" in request.POST
 
         try:
             Hashcat.ensure_hashfile_exists(hashfile)
@@ -322,7 +324,7 @@ def new_session(request):
             hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
             if crack_type == "dictionary":
                 res = hashcat_api.create_dictionary_session(session_name, hashfile, rule, wordlist, device_type,
-                                                            brain_mode, end_timestamp, hashcat_debug_file)
+                                                            brain_mode, end_timestamp, hashcat_debug_file, kernel_optimized)
             elif crack_type == "mask":
                 res = hashcat_api.create_mask_session(session_name, hashfile, mask, device_type, brain_mode,
                                                       end_timestamp, hashcat_debug_file)

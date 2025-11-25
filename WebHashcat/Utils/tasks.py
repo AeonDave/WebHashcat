@@ -125,7 +125,11 @@ def refresh_node_cache_task():
             node_entry.sessions = sessions
             node_entry.session_count = len(sessions)
             node_entry.running_sessions = running_sessions
-            node_entry.status = "Running" if running_sessions > 0 else "Stopped"
+            # "status" here describes the node's activity, not its reachability:
+            # - "Running": at least one session reported as Running on this node
+            # - "Idle": node responded successfully but has no running sessions
+            # - "Error": node unreachable or returned an error (set in the except block)
+            node_entry.status = "Running" if running_sessions > 0 else "Idle"
             node_entry.error = None
             node_entry.last_success = generated_at.isoformat()
 

@@ -331,7 +331,7 @@ class Hashcat(object):
 
     @classmethod
     def create_session(self, name, crack_type, hash_file, hash_mode_id, wordlist, rule, mask, username_included,
-                       device_type, brain_mode, end_timestamp, hashcat_debug_file):
+                       device_type, brain_mode, end_timestamp, hashcat_debug_file, kernel_optimized: bool = False):
 
         if name in self.sessions:
             raise Exception("This session name has already been used")
@@ -353,14 +353,17 @@ class Hashcat(object):
         rule_path: Optional[str] = None
         wordlist_path: Optional[str] = None
         mask_path: Optional[str] = None
+        rule_paths: List[str] = []
 
         if crack_type == "dictionary":
-            if rule != None and not rule in self.rules:
-                raise Exception("Inexistant rule, did you synchronise the files on your node ?")
-            elif rule == None:
-                rule_path = None
-            else:
-                rule_path = self.rules[rule]["path"]
+            if rule:
+                if isinstance(rule, str):
+                    rule = [rule]
+                for r in rule:
+                    if r not in self.rules:
+                        raise Exception("Inexistant rule, did you synchronise the files on your node ?")
+                    rule_paths.append(self.rules[r]["path"])
+                rule_path = ";".join(rule_paths)
 
             if wordlist == None or not wordlist in self.wordlists:
                 raise Exception("Inexistant wordlist, did you synchronise the files on your node ?")
@@ -404,6 +407,8 @@ class Hashcat(object):
             progress=0,
             reason="",
         )
+        # transient flags not persisted in DB
+        session.kernel_optimized = kernel_optimized
         self.sessions[session.name] = session
         session.setup()
         session.save()
@@ -443,6 +448,7 @@ class Hashcat(object):
                 session.save()
             self.sessions[session.name] = session
             session.setup()
+            session.kernel_optimized = False
 
     """
         Upload a new rule file
@@ -672,8 +678,10 @@ class Session(Model):
                 if self.hash_mode_id != -2:
                     cmd_line += ['-m', str(self.hash_mode_id)]
                 cmd_line += [str(self.hash_file), str(self.wordlist_file)]
-                if self.rule_file is not None:
-                    cmd_line += ['-r', str(self.rule_file)]
+                if self.rule_file:
+                    for rpath in str(self.rule_file).split(";"):
+                        if rpath:
+                            cmd_line += ['-r', str(rpath)]
             elif self.crack_type == "mask":
                 cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '3']
                 if self.hash_mode_id != -2:
@@ -687,6 +695,8 @@ class Session(Model):
                 cmd_line += ["-D", str(self.device_type)]
             # workload profile
             cmd_line += ["--workload-profile", str(Hashcat.workload_profile)]
+            if getattr(self, "kernel_optimized", False):
+                cmd_line.append("-O")
             # set pot file
             cmd_line += ["--potfile-path", self.pot_file]
         else:
@@ -805,7 +815,7 @@ class Session(Model):
             "name": self.name,
             "crack_type": self.crack_type,
             "device_type": self.device_type,
-            "rule": os.path.basename(self.rule_file)[:-5] if self.rule_file else None,
+            "rule": [os.path.basename(p)[:-5] for p in str(self.rule_file).split(";") if p] if self.rule_file else None,
             "mask": os.path.basename(self.mask_file)[:-7] if self.mask_file else None,
             "wordlist": os.path.basename(self.wordlist_file)[:-1 * len(".wordlist")] if self.wordlist_file else None,
             "status": self.session_status,
@@ -903,6 +913,11 @@ class Session(Model):
         else:
             self.session_status = "Done"
             reason = ""
+            # ensure progress is marked complete
+            try:
+                self.progress = 100.0
+            except Exception:
+                self.progress = 100
 
         self.reason = reason
         self.time_estimated = "N/A"

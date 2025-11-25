@@ -2,7 +2,7 @@
 
 Hashcat orchestration with a Django web UI, Celery workers, and Docker-first workflows.
 
-> This fork tracks the original project from https://github.com/hegusung/WebHashcat and keeps it current with Python 3.11, docker compose profiles, and hashcat 7.1.2 (CPU and CUDA).
+> This fork tracks the original project from https://github.com/hegusung/WebHashcat and keeps it current with Python 3.11, compose profiles, and hashcat 7.1.x images.
 
 ## Contents
 
@@ -23,7 +23,7 @@ WebHashcat (Modernized) exposes the hashcat CLI through a Django application and
 - Distributed orchestration: register many GPU or CPU nodes, sync them, and trigger cracking jobs remotely.
 - Multiple attack modes: dictionary (rules plus wordlists) and mask attacks with live status, resume, and statistics.
 - Near real-time visibility: cracked hashes appear immediately, global potfiles stay synchronized, and the UI offers search and analytics.
-- Shared storage: uploaded hashfiles, rules, masks, and wordlists live under `WebHashcat/Files/**` and are mounted in both the `web` and `celery` containers. Metadata (md5 and line counts) is cached per category (wordlists/rules/masks) in a single JSON file to avoid expensive rescans.
+- Shared storage: uploaded hashfiles, rules, masks, and wordlists live under `WebHashcat/Files/**` and are mounted in both the `web` and `celery` containers. Metadata (md5 and line counts) is cached per category (wordlists/rules/masks) in a JSON file per folder to avoid expensive rescans.
 - Safe workloads: Celery tasks and per-hashfile locks prevent long-running operations from stepping on each other.
 
 ## Architecture
@@ -44,7 +44,7 @@ WebHashcat (Modernized) exposes the hashcat CLI through a Django application and
 
 ## Quick start (Docker)
 
-Requirements: Docker Engine 24+, the `docker compose` plugin 2.29+, and (for CUDA) the NVIDIA Container Toolkit with drivers that support CUDA 12 or newer.
+Requirements: Docker Engine 24+, the `docker compose` plugin 2.29+, and the matching GPU runtime (NVIDIA Container Toolkit for CUDA, /dev/dri for Intel GPU, standard OpenCL for AMD/POCL).
 
 ### 1. Start the web stack
 
@@ -65,25 +65,25 @@ HashcatNode reads static settings (paths, bind, workload) from `HashcatNode/sett
 - Optional: set `HASHCATNODE_USERNAME` / `HASHCATNODE_PASSWORD` or `HASHCATNODE_HASH` env vars; these override `settings.ini`. Avoid storing passwords in `settings.ini` when secrets/env are available.
 - Paths (`HASHCATNODE_HASHES_DIR`, `..._RULES_DIR`, etc.) default to the Docker volume mounts; adjust via env if you change the volume layout.
 - The node's SQLite database is stored in a Docker named volume (`hashcatnode-db`) mounted at `/hashcatnode/data`, driven by `HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db`. No manual file creation is needed.
-- Hashcat 7.1.x supports compressed wordlists on-the-fly (`.gz`, `.zip`, `.7z`), so you can upload and keep wordlists in these formats; they are stored as-is and used directly by hashcat.
+- Hashcat 7.1.x supports compressed wordlists on-the-fly (`.gz`, `.zip`); uploads remain compressed on disk and are used directly by hashcat.
 
 ### 3. Start one or more nodes
 
 ```
 cd HashcatNode/
 
-# GPU / CUDA build (default hashcat v7.1.2)
-docker compose --profile cuda up -d --build
+# GPU builds
+docker compose --profile cuda up -d --build          # Nvidia CUDA
+docker compose --profile amd-gpu up -d --build       # AMD/OpenCL (tag :latest)
+docker compose --profile intel-gpu up -d --build     # Intel GPU (/dev/dri)
 
-# CPU-only build
-docker compose --profile cpu up -d --build
-
-# Override the bundled hashcat version
-HASHCAT_VERSION=v7.1.3 docker compose --profile cuda up -d --build
+# CPU builds
+docker compose --profile intel-cpu up -d --build     # Intel OpenCL CPU
+docker compose --profile pocl up -d --build          # Generic CPU/OpenCL
 ```
 
-- Both `hashcatnode-cuda` and `hashcatnode-cpu` automatically attach to `webhashcat-net`.
-- CUDA profile expects `nvidia-container-toolkit`; CPU profile works everywhere.
+- Nodes automatically attach to `webhashcat-net`. Pick the profile that matches your hardware (CUDA/AMD/Intel GPU/CPU).
+- CUDA profile expects `nvidia-container-toolkit`; Intel GPU needs `/dev/dri`; AMD/OpenCL uses the upstream `:latest` tag; CPU profiles work everywhere.
 - Override the Basic-Auth credentials by editing the secret files described above or by providing `HASHCATNODE_USERNAME[_FILE]` / `HASHCATNODE_PASSWORD[_FILE]` / `HASHCATNODE_HASH[_FILE]` env vars.
 - TLS material is generated on first boot inside `/hashcatnode/certs`. Mount your own cert/key pair and set `HASHCATNODE_CERT_PATH` / `HASHCATNODE_KEY_PATH` if you want trusted certificates.
 
@@ -97,7 +97,7 @@ Tip: Nodes on other machines do not need the shared Docker network. Just publish
 
 ### 5. Upload assets and launch sessions
 
-- Use **Hashcat → Files** to upload hashfiles, wordlists, masks, and rules. Uploaded files stay under `WebHashcat/Files/**` until removed. Drag & drop supports multiple files per category; compressed wordlists (`.gz`, `.zip`, `.7z`) remain compressed on disk and are used directly by hashcat.
+- Use **Hashcat → Files** to upload hashfiles, wordlists, masks, and rules. Uploaded files stay under `WebHashcat/Files/**` until removed. Drag & drop supports multiple files per category; compressed wordlists (`.gz`, `.zip`) remain compressed on disk and are used directly by hashcat.
 - From **Hashcat → Hashfiles**, click **Add** to import a new hashfile. Use the `+` button beside a hashfile to define a cracking session, then hit **Play** to start it.
 - Sessions stream progress back to the UI; Celery workers keep the potfile and cracked counts in sync.
 
@@ -195,8 +195,8 @@ Large datasets (10 million+ hashes) benefit from a few system tweaks:
 ## Changelog (Modernized)
 
 - New dark UI built with Tailwind + Flowbite, consolidated JS, and dropzones for bulk uploads (wordlists/rules/masks).
-- Asset metadata now cached per category (wordlists/rules/masks) in one JSON file; md5 is recorded at upload and line counts are reused unless the file name changes.
-- Wordlists support compressed uploads (`.gz`, `.zip`, `.7z`) stored as-is; rules count only non-empty, non-comment lines for accurate rule counts.
+- Asset metadata now cached per category (wordlists/rules/masks) in per-folder JSON files; md5 is recorded at upload and line counts are reused unless the file name changes.
+- Wordlists support compressed uploads (`.gz`, `.zip`) stored as-is; rules count only non-empty, non-comment lines for accurate rule counts.
 - Session creation hardens missing hashfiles: if the on-disk hashfile is absent it is regenerated from DB rows before contacting the node.
 - Node upload endpoint accepts JSON or multipart and disables compression headers for already-compressed uploads to avoid disconnects with large payloads.
 - Django/Celery cache: node and session snapshots served from Redis with staleness metadata to keep the UI responsive.

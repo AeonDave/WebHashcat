@@ -25,14 +25,29 @@ class HashcatSnapshotCache:
         self._stale_after = DEFAULT_CACHE_STALE_SECONDS
 
     def store_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        """Persist a snapshot to Redis, but fail gracefully if Redis is down.
+
+        The dashboard and API endpoints should keep working (with
+        "cache unavailable" hints) even when Redis is unreachable.
+        """
+
         payload = json.dumps(snapshot)
-        if self._ttl:
-            self._client.setex(self.cache_key, self._ttl, payload)
-        else:
-            self._client.set(self.cache_key, payload)
+        try:
+            if self._ttl:
+                self._client.setex(self.cache_key, self._ttl, payload)
+            else:
+                self._client.set(self.cache_key, payload)
+        except redis.exceptions.RedisError:
+            # If Redis is unavailable, ignore the error so that callers do not crash.
+            # The cache metadata will correctly report "available = False" on reads.
+            return
 
     def get_snapshot(self) -> Optional[Dict[str, Any]]:
-        payload = self._client.get(self.cache_key)
+        try:
+            payload = self._client.get(self.cache_key)
+        except redis.exceptions.RedisError:
+            # Treat Redis connection issues as "no snapshot available".
+            return None
         if not payload:
             return None
         try:

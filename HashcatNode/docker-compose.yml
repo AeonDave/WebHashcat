@@ -8,7 +8,6 @@ services:
          args:
             HASHCAT_BASE: dizcza/docker-hashcat:cuda
             HASHCAT_BINARY: /usr/local/bin/hashcat
-            HASHCAT_VERSION: ${HASHCAT_VERSION:-v7.1.2}
       ports:
          - "9999:9999"
       environment:
@@ -49,7 +48,6 @@ services:
          args:
             HASHCAT_BASE: dizcza/docker-hashcat:intel-cpu
             HASHCAT_BINARY: /usr/local/bin/hashcat
-            HASHCAT_VERSION: ${HASHCAT_VERSION:-v7.1.2}
       ports:
          - "9999:9999"
       environment:
@@ -74,6 +72,74 @@ services:
             aliases:
                - hashcatnode-cpu
 
+   node-amd-gpu:
+      profiles:
+         - amd-gpu
+      container_name: hashcatnode-amd-gpu
+      build:
+         context: .
+         args:
+            HASHCAT_BASE: dizcza/docker-hashcat:latest
+            HASHCAT_BINARY: /usr/local/bin/hashcat
+      ports:
+         - "9999:9999"
+      environment:
+         - HASHCATNODE_DEVICE_TYPE=2
+         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
+         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
+         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
+         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
+      restart: unless-stopped
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+         - ./secrets:/run/secrets:ro
+      networks:
+         webhashcat:
+            aliases:
+               - hashcatnode-amd-gpu
+
+   node-intel-gpu:
+      profiles:
+         - intel-gpu
+      container_name: hashcatnode-intel-gpu
+      build:
+         context: .
+         args:
+            HASHCAT_BASE: dizcza/docker-hashcat:intel-gpu
+            HASHCAT_BINARY: /usr/local/bin/hashcat
+      ports:
+         - "9999:9999"
+      environment:
+         - HASHCATNODE_DEVICE_TYPE=2
+         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
+         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
+         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
+         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
+      restart: unless-stopped
+      devices:
+         - /dev/dri:/dev/dri
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+         - ./secrets:/run/secrets:ro
+      networks:
+         webhashcat:
+            aliases:
+               - hashcatnode-intel-gpu
+
    node-pocl:
       profiles:
          - pocl
@@ -83,7 +149,6 @@ services:
          args:
             HASHCAT_BASE: dizcza/docker-hashcat:pocl
             HASHCAT_BINARY: /usr/local/bin/hashcat
-            HASHCAT_VERSION: ${HASHCAT_VERSION:-v7.1.2}
       ports:
          - "9999:9999"
       environment:

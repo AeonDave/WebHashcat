@@ -119,7 +119,7 @@ def node(request, node_name, error_msg=""):
                     with open(wordlist["path"], 'rb') as fh:
                         hashcat_api.upload_wordlist(wordlist["name"], fh)
             # After sync, redirect to GET to avoid stale context and show fresh data
-            return redirect('Nodes:node', node_name=node_name)
+            return redirect('Nodes:node', node_name)
 
     try:
         hashcat_api = HashcatAPI(node_item.hostname, node_item.port, node_item.username, node_item.password)

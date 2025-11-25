@@ -26,8 +26,6 @@ services:
   web:
     build:
       context: .
-      args:
-        HASHCAT_VERSION: ${HASHCAT_VERSION:-v7.1.2}
     command: python3 manage.py runserver 0.0.0.0:8000
     ports:
       - "8000:8000"
@@ -47,8 +45,6 @@ services:
   celery:
     build:
       context: .
-      args:
-        HASHCAT_VERSION: ${HASHCAT_VERSION:-v7.1.2}
     command: celery -A WebHashcat worker -B -l info
     env_file:
       - variables.env
