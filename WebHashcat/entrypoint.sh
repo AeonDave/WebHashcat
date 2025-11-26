@@ -2,10 +2,14 @@
 
 sleep 2
 
-# Try standard migrate, then fallback to fake-initial if the schema already exists
+# Migrations can fail if the DB already has tables but no migration history.
+# Try normal migrate, then --fake-initial, then --fake as a last resort to mark existing schema.
 if ! python3 manage.py migrate --noinput; then
   echo "Standard migrate failed, retrying with --fake-initial"
-  python3 manage.py migrate --noinput --fake-initial
+  if ! python3 manage.py migrate --noinput --fake-initial; then
+    echo "Fake-initial migrate failed, retrying with --fake (mark as applied)"
+    python3 manage.py migrate --noinput --fake
+  fi
 fi
 
 if [[ ! -z "${DJANGO_SUPERUSER_USERNAME}" ]]; then

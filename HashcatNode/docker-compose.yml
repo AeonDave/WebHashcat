@@ -11,7 +11,7 @@ services:
       ports:
          - "9999:9999"
       env_file:
-         - ./.env
+         - ../.env
       environment:
          - NVIDIA_VISIBLE_DEVICES=all
          - HASHCATNODE_DEVICE_TYPE=2
@@ -48,7 +48,7 @@ services:
       ports:
          - "9999:9999"
       env_file:
-         - ./.env
+         - ../.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=1
       restart: unless-stopped
@@ -78,7 +78,7 @@ services:
       ports:
          - "9999:9999"
       env_file:
-         - ./.env
+         - ../.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=2
       restart: unless-stopped
@@ -108,7 +108,7 @@ services:
       ports:
          - "9999:9999"
       env_file:
-         - ./.env
+         - ../.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=2
       restart: unless-stopped
@@ -140,7 +140,7 @@ services:
       ports:
          - "9999:9999"
       env_file:
-         - ./.env
+         - ../.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=1
       restart: unless-stopped

@@ -75,6 +75,8 @@ docker compose --env-file ../.env up -d --build
 ```
 # from the repo root
 cd HashcatNode/
+# If the web stack is not running on this host, ensure the shared network exists once:
+# docker network inspect webhashcat-net >/dev/null 2>&1 || docker network create webhashcat-net
 docker compose --env-file ../.env --profile cuda up -d --build          # Nvidia CUDA
 docker compose --env-file ../.env --profile amd-gpu up -d --build       # AMD/OpenCL (tag :latest)
 docker compose --env-file ../.env --profile intel-gpu up -d --build     # Intel GPU (/dev/dri)
