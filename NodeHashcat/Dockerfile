@@ -19,7 +19,7 @@ EXPOSE 9999
 
 # Python requirements
 COPY requirements.txt ./
-RUN PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install --no-cache-dir -r requirements.txt
+RUN PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install --no-cache-dir --ignore-installed -r requirements.txt
 
 # Application sources
 COPY . .
