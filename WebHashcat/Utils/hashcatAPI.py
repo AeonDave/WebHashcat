@@ -14,6 +14,7 @@ timeout_connection = float(os.environ.get("HASHCAT_API_CONNECT_TIMEOUT", 1))
 timeout_read = float(os.environ.get("HASHCAT_API_READ_TIMEOUT", 60 * 10))
 TIMEOUT: Tuple[float, float] = (timeout_connection, timeout_read)
 TRUST_BUNDLE_ENV = "HASHCAT_TRUST_BUNDLE"
+BRAIN_HOST_HINT = os.environ.get("HASHCAT_BRAIN_HOST", "").strip()
 
 
 class HashcatAPIError(Exception):
@@ -215,11 +216,14 @@ class HashcatAPI(object):
         return "https://%s:%d%s" % (self.ip, self.port, path)
 
     def _headers(self):
-        return {
+        headers = {
             "Content-Type": "text/plain; charset=utf-8",
             "Accept-Encoding": "text/plain",
             "Authorization": "Basic %s" % self.key,
         }
+        if BRAIN_HOST_HINT:
+            headers["X-Hashcat-Brain-Host"] = BRAIN_HOST_HINT
+        return headers
 
     def _perform_request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = self._build_url(path)

@@ -20,6 +20,9 @@ class Session(models.Model):
     hashfile = models.ForeignKey(Hashfile, on_delete=models.CASCADE)
     node = models.ForeignKey(Node, on_delete=models.CASCADE)
     potfile_line_retrieved = models.IntegerField()
+    # Optional identifier used to group multiple sessions into a Brain cluster
+    # so that the UI can control them with a single set of buttons.
+    cluster = models.CharField(max_length=100, null=True, blank=True)
 
 
 class Hash(models.Model):

@@ -370,6 +370,8 @@ def api_hashfile_sessions(request):
     node_snapshots = _node_snapshots(snapshot)
 
     data = []
+    primary_clusters = set()
+
     for session in Session.objects.filter(hashfile_id=hashfile_id).select_related("node", "hashfile"):
         node = session.node
         hashfile = session.hashfile
@@ -379,6 +381,13 @@ def api_hashfile_sessions(request):
 
         cached = session_snapshots.get(session.name)
         node_label = cached.get("node_name") if cached and cached.get("node_name") else node.name
+
+        cluster_id = getattr(session, "cluster", None)
+        is_primary_cluster = False
+        if cluster_id:
+            if cluster_id not in primary_clusters:
+                primary_clusters.add(cluster_id)
+                is_primary_cluster = True
 
         if cached is None:
             node_cached = node_snapshots.get(str(node.id)) if snapshot else None
@@ -394,11 +403,17 @@ def api_hashfile_sessions(request):
                 "progress": "",
                 "speed": "",
                 "buttons": "",
+                "cluster": cluster_id or "",
             })
             continue
 
         if cached.get("response") == "error":
-            buttons = _render_session_buttons("Error", session.name)
+            if cluster_id and is_primary_cluster:
+                buttons = _render_cluster_buttons("Error", cluster_id)
+            elif cluster_id and not is_primary_cluster:
+                buttons = ""
+            else:
+                buttons = _render_session_buttons("Error", session.name)
             status_label = "Inexistant"
             crack_type = ""
             rule_mask = ""
@@ -408,7 +423,12 @@ def api_hashfile_sessions(request):
             speed = ""
         else:
             status_value = cached.get("status") or "Unknown"
-            buttons = _render_session_buttons(status_value, session.name)
+            if cluster_id and is_primary_cluster:
+                buttons = _render_cluster_buttons(status_value, cluster_id)
+            elif cluster_id and not is_primary_cluster:
+                buttons = ""
+            else:
+                buttons = _render_session_buttons(status_value, session.name)
 
             crack_type = cached.get("crack_type")
             if crack_type == "dictionary":
@@ -441,6 +461,7 @@ def api_hashfile_sessions(request):
             "progress": progress,
             "speed": speed,
             "buttons": buttons,
+            "cluster": cluster_id or "",
         })
 
     result["data"] = data
@@ -656,6 +677,63 @@ def api_session_action(request):
         session.delete()
 
     return HttpResponse(json.dumps(res), content_type="application/json")
+
+
+@login_required
+def api_cluster_action(request):
+    if request.method == "POST":
+        params = request.POST
+    else:
+        params = request.GET
+
+    cluster_id = params.get("cluster")
+    action = params.get("action")
+
+    if not cluster_id or not action:
+        return HttpResponse(
+            json.dumps({"response": "error", "message": "Missing cluster or action"}),
+            content_type="application/json",
+            status=400,
+        )
+
+    sessions = list(Session.objects.filter(cluster=cluster_id).select_related("hashfile", "node"))
+    if not sessions:
+        return HttpResponse(
+            json.dumps({"response": "error", "message": "Cluster not found"}),
+            content_type="application/json",
+            status=404,
+        )
+
+    # Permission check: user must be owner (or staff) for all hashfiles in the cluster.
+    for s in sessions:
+        if s.hashfile.owner != request.user and not request.user.is_staff:
+            raise Http404("You do not have permission to control this cluster.")
+
+    errors = []
+
+    for s in sessions:
+        node = s.node
+        try:
+            hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+            hashcat_api.action(s.name, action)
+        except HashcatAPIError as exc:
+            errors.append(f"{s.name}@{node.name}: {exc}")
+
+    if action == "remove":
+        for s in sessions:
+            s.delete()
+
+    if errors:
+        return HttpResponse(
+            json.dumps({
+                "response": "partial_error",
+                "message": "; ".join(errors[:3]),
+            }),
+            content_type="application/json",
+            status=207,
+        )
+
+    return HttpResponse(json.dumps({"response": "ok"}), content_type="application/json")
 
 
 @login_required
@@ -893,5 +971,29 @@ def _render_session_buttons(status: str, session_name: str) -> str:
     else:
         buttons.append(btn("Start", "start", "bg-emerald-900/40 border border-emerald-700 text-emerald-200"))
         buttons.append(btn("Remove", "remove", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
+
+    return "<div class='flex justify-end gap-1'>%s</div>" % "".join(buttons)
+
+
+def _render_cluster_buttons(status: str, cluster_id: str) -> str:
+    def btn(label, action, style):
+        return (
+            f"<button type='button' class='px-2 py-1 text-xs rounded {style}' "
+            f"onClick='cluster_action(\"{cluster_id}\", \"{action}\")'>{label}</button>"
+        )
+
+    buttons = []
+    if status == "Not started":
+        buttons.append(btn("Start all", "start", "bg-emerald-900/40 border border-emerald-700 text-emerald-200"))
+        buttons.append(btn("Remove all", "remove", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
+    elif status == "Running":
+        buttons.append(btn("Pause all", "pause", "bg-amber-900/40 border border-amber-700 text-amber-200"))
+        buttons.append(btn("Stop all", "quit", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
+    elif status == "Paused":
+        buttons.append(btn("Resume all", "resume", "bg-emerald-900/40 border border-emerald-700 text-emerald-200"))
+        buttons.append(btn("Stop all", "quit", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
+    else:
+        buttons.append(btn("Start all", "start", "bg-emerald-900/40 border border-emerald-700 text-emerald-200"))
+        buttons.append(btn("Remove all", "remove", "bg-red-900/40 border border-red-700 text-red-200 ml-1"))
 
     return "<div class='flex justify-end gap-1'>%s</div>" % "".join(buttons)

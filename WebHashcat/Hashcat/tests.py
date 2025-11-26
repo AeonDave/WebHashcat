@@ -186,6 +186,10 @@ class SessionControlViewTests(TestCase):
             cracked_count=0,
             username_included=False,
         )
+        HASHFILES_DIR.mkdir(parents=True, exist_ok=True)
+        self.hash_path = HASHFILES_DIR / self.hashfile.hashfile
+        self.hash_path.write_text("hash", encoding="utf-8")
+        self.addCleanup(lambda: self.hash_path.unlink(missing_ok=True))
 
     @patch("Hashcat.views.HashcatAPI")
     @patch("Hashcat.views.random.choice", return_value="Z")

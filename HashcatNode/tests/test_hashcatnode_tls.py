@@ -43,7 +43,12 @@ class EnsureTlsMaterialTests(unittest.TestCase):
         mock_chmod.assert_called_once_with(self.key_path, 0o600)
 
     def test_tls_days_env_is_used(self):
-        with mock.patch("HashcatNode.hashcatnode.subprocess.run") as mock_run, \
+        def _fake_openssl(cmd, check):
+            self.cert_path.write_text("generated cert")
+            self.key_path.write_text("generated key")
+            return mock.Mock()
+
+        with mock.patch("HashcatNode.hashcatnode.subprocess.run", side_effect=_fake_openssl) as mock_run, \
                 mock.patch.dict(os.environ, {"HASHCATNODE_TLS_DAYS": "10"}, clear=False):
             hashcatnode._ensure_tls_material(self.cert_path, self.key_path)
         called_cmd = mock_run.call_args[0][0]
@@ -62,8 +67,9 @@ class MainEntrypointTests(unittest.TestCase):
 
         self.settings_path.write_text(
             "[General]\nloglevel=info\n"
-            "[Server]\nbind=0.0.0.0\nport=9999\nusername=user\nsha256hash=dummy\n"
-            "[Hashcat]\nbinary=/bin/true\nhashes_dir=/tmp\nrule_dir=/tmp\nwordlist_dir=/tmp\nmask_dir=/tmp\nworkload_profile=2\n",
+            "[Server]\nbind=0.0.0.0\nport=9999\nusername=user\nsha256hash=\n"
+            "[Hashcat]\nbinary=/bin/true\nhashes_dir=/tmp\nrule_dir=/tmp\nwordlist_dir=/tmp\nmask_dir=/tmp\nworkload_profile=2\n"
+            "[Brain]\nenabled=false\nport=13743\npassword=brainpw\n",
             encoding="utf-8",
         )
 
@@ -80,16 +86,19 @@ class MainEntrypointTests(unittest.TestCase):
                 mock.patch("HashcatNode.hashcatnode.Server") as mock_server, \
                 mock.patch("HashcatNode.hashcatnode.Hashcat") as mock_hashcat:
             mock_hashcat.return_value = mock.Mock()
-            hashcatnode.main(run_server=False)
+            hashcatnode.main(run_server=True)
 
         mock_server.assert_called_once()
         args, kwargs = mock_server.call_args
         self.assertIn("envuser", args)
-        self.assertEqual(args[4], str(self.cert_file))
-        self.assertEqual(args[5], str(self.key_file))
+        # args: bind, port, username, password_hash, hashes_dir, cert_file, key_file
+        self.assertEqual(args[5], str(self.cert_file))
+        self.assertEqual(args[6], str(self.key_file))
 
     def test_build_settings_constructs_dataclass(self):
-        with mock.patch("HashcatNode.hashcatnode._ensure_tls_material",
+        with mock.patch("HashcatNode.hashcatnode.SETTINGS_PATH", self.settings_path), \
+                mock.patch.dict(os.environ, {"HASHCATNODE_PASSWORD": "pw"}, clear=False), \
+                mock.patch("HashcatNode.hashcatnode._ensure_tls_material",
                         return_value=(str(self.cert_file), str(self.key_file))):
             config = hashcatnode._read_config()
             settings = hashcatnode._build_settings(config)

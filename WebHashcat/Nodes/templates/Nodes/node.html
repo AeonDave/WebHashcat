@@ -37,6 +37,18 @@
     </div>
     <div class="space-y-1 text-sm text-gray-300">
       <div>Hashcat version: {{ version }}</div>
+      <div>Brain: 
+        {% if brain_enabled %}
+          <span class="px-2 py-1 rounded bg-primary/20 text-primary border border-primary/40 text-xs align-middle">Enabled</span>
+          {% if brain_host_set %}
+            <span class="text-xs text-gray-400 ml-2">(host configurato)</span>
+          {% else %}
+            <span class="text-xs text-amber-400 ml-2">(host non ancora rilevato)</span>
+          {% endif %}
+        {% else %}
+          <span class="px-2 py-1 rounded bg-gray-800 text-gray-300 border border-gray-700 text-xs align-middle">Disabled</span>
+        {% endif %}
+      </div>
     </div>
   </div>
 

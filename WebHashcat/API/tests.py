@@ -48,7 +48,11 @@ class CacheBackedApiTests(TestCase):
         response = self.client.get(reverse("API:api_node_status"), {"draw": 1})
         payload = response.json()
 
-        self.assertEqual(payload["data"], [[node.name, "7.1.2", "Running"]])
+        self.assertEqual(len(payload["data"]), 1)
+        row = payload["data"][0]
+        self.assertEqual(row["name"], node.name)
+        self.assertEqual(row["version"], "7.1.2")
+        self.assertEqual(row["status"], "Running")
         self.assertIn("cache", payload)
 
     def test_running_sessions_read_from_cache(self):

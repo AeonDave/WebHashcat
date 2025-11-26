@@ -278,11 +278,6 @@ def files(request):
 @login_required
 def new_session(request):
     if request.method == 'POST':
-        # session_name = request.POST["name"]
-
-        node_name = request.POST["node"]
-        node = get_object_or_404(Node, name=node_name)
-
         hashfile = get_object_or_404(Hashfile, id=request.POST['hashfile_id'])
 
         # Check if the user owns the Hashfile or Staff
@@ -298,14 +293,14 @@ def new_session(request):
             mask = request.POST["mask"]
 
         device_type = int(request.POST["device_type"])
-        brain_mode = int(request.POST["brain_mode"])
 
         if request.POST["end_datetime"]:
             end_timestamp = int(datetime.strptime(request.POST["end_datetime"], "%m/%d/%Y %I:%M %p").timestamp())
         else:
             end_timestamp = None
 
-        session_name = ("%s-%s" % (hashfile.name, ''.join(
+        # Identificatore base usato per i nomi di sessione e, se necessario, per il cluster.
+        base_id = ("%s-%s" % (hashfile.name, ''.join(
             random.choice(string.ascii_uppercase + string.digits) for _ in range(12)))).replace(" ", "_")
 
         if "debug" in request.POST:
@@ -319,37 +314,146 @@ def new_session(request):
         except FileNotFoundError:
             messages.error(request, "Hashfile content is missing on disk; please re-import the hashfile before starting a session.")
             return redirect('Hashcat:hashfiles')
+        node_name = request.POST["node"]
 
-        try:
-            hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
-            if crack_type == "dictionary":
-                res = hashcat_api.create_dictionary_session(session_name, hashfile, rule, wordlist, device_type,
-                                                            brain_mode, end_timestamp, hashcat_debug_file, kernel_optimized)
-            elif crack_type == "mask":
-                res = hashcat_api.create_mask_session(session_name, hashfile, mask, device_type, brain_mode,
-                                                      end_timestamp, hashcat_debug_file, kernel_optimized)
+        # Modalità standard: un singolo nodo, nessun Brain esplicito dalla UI.
+        if node_name != "__brain_cluster__":
+            node = get_object_or_404(Node, name=node_name)
+            session_name = base_id
+            brain_mode = 0  # Brain disabilitato quando si sceglie un singolo nodo
+
+            try:
+                hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+                if crack_type == "dictionary":
+                    res = hashcat_api.create_dictionary_session(
+                        session_name,
+                        hashfile,
+                        rule,
+                        wordlist,
+                        device_type,
+                        brain_mode,
+                        end_timestamp,
+                        hashcat_debug_file,
+                        kernel_optimized,
+                    )
+                elif crack_type == "mask":
+                    res = hashcat_api.create_mask_session(
+                        session_name,
+                        hashfile,
+                        mask,
+                        device_type,
+                        brain_mode,
+                        end_timestamp,
+                        hashcat_debug_file,
+                        kernel_optimized,
+                    )
+                else:
+                    res = {"response": "error", "message": "Unsupported cracking type"}
+            except HashcatAPIError as exc:
+                detail = ""
+                if hasattr(exc, "body") and exc.body:
+                    detail = f" (details: {exc.body[:200]})"
+                messages.error(request, f"Node {node_name} not accessible: {exc}{detail}")
+                return redirect('Hashcat:hashfiles')
+
+            if not res or res.get("response") == "error":
+                messages.error(request, res.get("message", "Node rejected session"))
+                return redirect('Hashcat:hashfiles')
+
+            session = Session(
+                name=session_name,
+                hashfile=hashfile,
+                node=node,
+                potfile_line_retrieved=0,
+            )
+            session.save()
+
+            messages.success(request, "Session successfully created")
+
+        # Modalità Brain cluster: crea una sessione per ogni nodo con Brain attivo.
+        else:
+            brain_mode = 3
+            created = 0
+            errors = []
+
+            for node in Node.objects.all():
+                try:
+                    hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+                    info = hashcat_api.get_hashcat_info()
+                except HashcatAPIError as exc:
+                    errors.append(f"Node {node.name} not accessible: {exc}")
+                    continue
+
+                if not info or info.get("response") != "ok":
+                    errors.append(f"Node {node.name} did not return hashcat info")
+                    continue
+
+                if not info.get("brain_enabled"):
+                    # Nodo non configurato per Brain: viene ignorato in questo cluster.
+                    continue
+
+                if not info.get("brain_host_set"):
+                    errors.append(f"Node {node.name} has Brain enabled but no host detected; retry after WebHashcat has contacted it or set [Brain].host")
+                    continue
+
+                session_name = f"{base_id}-{node.name}"
+
+                try:
+                    if crack_type == "dictionary":
+                        res = hashcat_api.create_dictionary_session(
+                            session_name,
+                            hashfile,
+                            rule,
+                            wordlist,
+                            device_type,
+                            brain_mode,
+                            end_timestamp,
+                            hashcat_debug_file,
+                            kernel_optimized,
+                        )
+                    elif crack_type == "mask":
+                        res = hashcat_api.create_mask_session(
+                            session_name,
+                            hashfile,
+                            mask,
+                            device_type,
+                            brain_mode,
+                            end_timestamp,
+                            hashcat_debug_file,
+                            kernel_optimized,
+                        )
+                    else:
+                        res = {"response": "error", "message": "Unsupported cracking type"}
+                except HashcatAPIError as exc:
+                    errors.append(f"Node {node.name} rejected cluster session: {exc}")
+                    continue
+
+                if not res or res.get("response") == "error":
+                    errors.append(res.get("message", f"Node {node.name} rejected session"))
+                    continue
+
+                db_session = Session(
+                    name=session_name,
+                    hashfile=hashfile,
+                    node=node,
+                    potfile_line_retrieved=0,
+                    cluster=base_id,
+                )
+                db_session.save()
+                created += 1
+
+            if created == 0:
+                # Nessun nodo con Brain attivo ha accettato la sessione.
+                if errors:
+                    messages.error(request, "Unable to create Brain cluster: " + "; ".join(errors[:3]))
+                else:
+                    messages.error(request, "Unable to create Brain cluster: no Brain-enabled nodes available.")
+                return redirect('Hashcat:hashfiles')
+
+            if errors:
+                messages.warning(request, f"Brain cluster created on {created} node(s); some nodes were skipped: " + "; ".join(errors[:3]))
             else:
-                res = {"response": "error", "message": "Unsupported cracking type"}
-        except HashcatAPIError as exc:
-            detail = ""
-            if hasattr(exc, "body") and exc.body:
-                detail = f" (details: {exc.body[:200]})"
-            messages.error(request, f"Node {node_name} not accessible: {exc}{detail}")
-            return redirect('Hashcat:hashfiles')
-
-        if not res or res.get("response") == "error":
-            messages.error(request, res.get("message", "Node rejected session"))
-            return redirect('Hashcat:hashfiles')
-
-        messages.success(request, "Session successfully created")
-
-        session = Session(
-            name=session_name,
-            hashfile=hashfile,
-            node=node,
-            potfile_line_retrieved=0,
-        )
-        session.save()
+                messages.success(request, f"Brain cluster created on {created} node(s)")
 
     return redirect('Hashcat:hashfiles')
 

@@ -14,7 +14,7 @@ from django.conf import settings
 from django.db import connection
 from django.utils import timezone
 
-from Hashcat.models import Hashfile, Hash, Search
+from Hashcat.models import Hashfile, Hash, Search, Session
 from Nodes.models import Node
 from Utils.hashcat import Hashcat
 from Utils.hashcatAPI import HashcatAPI
@@ -23,7 +23,6 @@ from Utils.models import Task
 from Utils.node_snapshot import NodeSnapshot
 from Utils.session_snapshot import SessionSnapshot
 from Utils.utils import only_one
-# from celery import Celery
 from WebHashcat.celery import app
 
 logger = get_task_logger(__name__)
@@ -136,6 +135,14 @@ def refresh_node_cache_task():
             for session in sessions:
                 session_name = session.get("name")
                 if not session_name:
+                    continue
+                # If the session is no longer tracked in Django (removed from UI),
+                # clean it up on the node and skip polling it.
+                if not Session.objects.filter(name=session_name, node=node).exists():
+                    try:
+                        hashcat_api.action(session_name, "remove")
+                    except Exception as exc:
+                        logger.warning("Failed to remove stale session %s on node %s: %s", session_name, node.name, exc)
                     continue
                 session_snapshot = _build_session_snapshot(hashcat_api, session_name, node.name, node.id)
                 snapshot["sessions"][session_name] = session_snapshot.as_dict()

@@ -732,12 +732,16 @@ class Session(Model):
             # resume previous session
             cmd_line = [Hashcat.binary, '--session', self.name, '--restore']
 
-        if Hashcat.brain['enabled'] == 'true' and self.brain_mode != 0:
+        # Brain client options
+        brain_cfg = getattr(Hashcat, "brain", {}) or {}
+        brain_enabled = str(brain_cfg.get('enabled', 'false')).lower() == 'true'
+        brain_host = str(brain_cfg.get('host', '') or '').strip()
+        if brain_enabled and brain_host and self.brain_mode != 0:
             cmd_line += ['-z']
             cmd_line += ['--brain-client-features', str(self.brain_mode)]
-            cmd_line += ['--brain-host', Hashcat.brain['host']]
-            cmd_line += ['--brain-port', Hashcat.brain['port']]
-            cmd_line += ['--brain-password', Hashcat.brain['password']]
+            cmd_line += ['--brain-host', brain_host]
+            cmd_line += ['--brain-port', brain_cfg.get('port', Hashcat.brain.get('port'))]
+            cmd_line += ['--brain-password', brain_cfg.get('password', Hashcat.brain.get('password'))]
 
         cmd_line = [str(item) for item in cmd_line]
         flattened_cmd = " ".join(cmd_line)
@@ -1066,7 +1070,14 @@ class Session(Model):
     """
 
     def quit(self):
-        if not self.session_status in ["Paused", "Running"]:
+        # If the process was never started (e.g., failed before Popen), just mark Aborted.
+        if not hasattr(self, "session_process") or self.session_process is None:
+            self.session_status = "Aborted"
+            self.reason = ""
+            self.save()
+            return
+
+        if self.session_status not in ["Paused", "Running"]:
             return
 
         if os.name == 'nt':
@@ -1081,12 +1092,13 @@ class Session(Model):
             try:
                 self.session_process.stdin.write(b'q')
                 self.session_process.stdin.flush()
-            except BrokenPipeError:
+            except (BrokenPipeError, AttributeError):
                 pass
 
-        LOGGER.info("Waiting for session %s thread to finish", self.name)
-        self.thread.join()
-        LOGGER.info("Session %s thread finished", self.name)
+        if hasattr(self, "thread") and self.thread:
+            LOGGER.info("Waiting for session %s thread to finish", self.name)
+            self.thread.join()
+            LOGGER.info("Session %s thread finished", self.name)
 
         self.session_status = "Aborted"
         self.save()

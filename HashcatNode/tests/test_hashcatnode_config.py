@@ -195,27 +195,55 @@ class AssetLoaderTests(unittest.TestCase):
 class SessionCommandTests(unittest.TestCase):
     def setUp(self):
         # minimal session setup
-        self.session = Session.__new__(Session)
-        self.session.name = "sess"
-        self.session.crack_type = "dictionary"
-        self.session.hash_mode_id = -2  # autodetect
-        self.session.hash_file = "/tmp/hashes"
-        self.session.wordlist_file = "/tmp/wl"
-        self.session.mask_file = "/tmp/mask"
-        self.session.rule_file = None
-        self.session.username_included = False
-        self.session.device_type = None
-        self.session.brain_mode = 0
-        self.session.pot_file = "/tmp/pot"
+        self._temp_files = []
+        def _tempfile():
+            fh = tempfile.NamedTemporaryFile(delete=False)
+            fh.write(b"data")
+            fh.flush()
+            fh.close()
+            self._temp_files.append(fh.name)
+            return fh.name
+
+        binary_path = _tempfile()
+        hash_file = _tempfile()
+        wordlist_file = _tempfile()
+        mask_file = _tempfile()
+
+        Hashcat.binary = binary_path
+        self.session = Session(
+            name="sess",
+            crack_type="dictionary",
+            hash_mode_id=-2,  # autodetect
+            hash_file=hash_file,
+            wordlist_file=wordlist_file,
+            mask_file=mask_file,
+            rule_file=None,
+            username_included=False,
+            device_type=None,
+            brain_mode=0,
+            end_timestamp=None,
+            output_file=None,
+            session_status="",
+            time_started=None,
+            progress=0.0,
+            reason="",
+            pot_file=_tempfile(),
+        )
         self.session.hashcat_output_file = tempfile.NamedTemporaryFile(delete=False).name
         self.session.mask = "mask"
-        self.session.mask_file = "/tmp/mask"
-        self.session.session_status = ""
         self.session.thread = None
         self.session.save = mock.Mock()
         self.session.update_session = mock.Mock()
         self.session._finalize_process_result = mock.Mock()
 
+    def tearDown(self):
+        for path in self._temp_files:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    @mock.patch("HashcatNode.hashcat.os.name", "posix")
     @mock.patch("HashcatNode.hashcat.subprocess.Popen")
     def test_autodetect_omits_hash_mode_flag(self, mock_popen):
         popen_inst = mock.Mock()
@@ -231,6 +259,7 @@ class SessionCommandTests(unittest.TestCase):
         args = mock_popen.call_args[0][0]
         self.assertNotIn("-m", args)
 
+    @mock.patch("HashcatNode.hashcat.os.name", "posix")
     @mock.patch("HashcatNode.hashcat.subprocess.Popen")
     def test_mask_includes_mask_file(self, mock_popen):
         popen_inst = mock.Mock()

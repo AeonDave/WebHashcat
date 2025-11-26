@@ -38,10 +38,12 @@ def nodes(request, error_msg=""):
 
     for node in Node.objects.all():
         status = {"state": "unknown", "label": "Unknown"}
+        brain_enabled = False
         try:
             api = HashcatAPI(node.hostname, node.port, node.username, node.password)
             info = api.get_hashcat_info()
             if info.get("response") == "ok":
+                brain_enabled = bool(str(info.get("brain_enabled", "")).lower() == "true")
                 rules_ok = _is_synced(info.get("rules", {}), local_rules)
                 masks_ok = _is_synced(info.get("masks", {}), local_masks)
                 wordlists_ok = _is_synced(info.get("wordlists", {}), local_wordlists)
@@ -56,6 +58,7 @@ def nodes(request, error_msg=""):
         node_rows.append({
             "obj": node,
             "status": status,
+            "brain_enabled": brain_enabled,
         })
 
     context["node_rows"] = node_rows
@@ -164,6 +167,8 @@ def node(request, node_name, error_msg=""):
     hash_type_list = sorted(node_data["hash_types"], key=itemgetter('id'))
 
     context["version"] = node_data["version"]
+    context["brain_enabled"] = bool(str(node_data.get("brain_enabled", "")).lower() == "true")
+    context["brain_host_set"] = bool(node_data.get("brain_host_set", False))
     context["system"] = node_data.get("system", {})
     context["rule_list"] = rule_list
     context["mask_list"] = mask_list

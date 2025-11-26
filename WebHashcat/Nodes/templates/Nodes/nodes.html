@@ -14,6 +14,7 @@
       <th class="text-left py-2">Name</th>
       <th class="text-left py-2">Host</th>
       <th class="text-left py-2">Port</th>
+      <th class="text-left py-2">Brain</th>
       <th class="text-left py-2">Sync</th>
       <th class="text-right py-2">Actions</th>
     </tr>
@@ -25,6 +26,13 @@
       <td class="py-2"><a class="text-primary hover:underline" href="{% url "Nodes:node" node.name %}">{{ node.name }}</a></td>
       <td class="py-2">{{ node.hostname }}</td>
       <td class="py-2">{{ node.port }}</td>
+      <td class="py-2">
+        {% if row.brain_enabled %}
+          <span class="px-2 py-1 rounded bg-primary/20 text-primary border border-primary/40 text-xs">Enabled</span>
+        {% else %}
+          <span class="px-2 py-1 rounded bg-gray-800 text-gray-300 border border-gray-700 text-xs">Disabled</span>
+        {% endif %}
+      </td>
       <td class="py-2">
         {% if status.state == "ok" %}
           <span class="px-2 py-1 rounded bg-emerald-900/40 text-emerald-200 border border-emerald-700 text-xs">{{ status.label }}</span>

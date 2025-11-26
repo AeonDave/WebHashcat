@@ -155,6 +155,15 @@ document.addEventListener('DOMContentLoaded', () => {
       success: function () { reload_hashfile_table(); }
     });
   }
+  function cluster_action(cluster_id, action) {
+    if (action === "remove" && !window.confirm("Are you sure you want to remove all sessions in this cluster?")) return;
+    $.ajax({
+      url: cfg.clusterActionUrl,
+      type: 'GET',
+      data: { cluster: cluster_id, action: action },
+      success: function () { reload_hashfile_table(); }
+    });
+  }
   function hashfile_action(hashfile_id, action) {
     if (action === "remove" && !window.confirm("Are you sure?")) return;
     $.ajax({
@@ -165,6 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   window.session_action = session_action;
+  window.cluster_action = cluster_action;
   window.hashfile_action = hashfile_action;
 
   function update_messages() {

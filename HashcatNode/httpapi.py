@@ -51,6 +51,51 @@ class Server:
         self._cert_path = cert_path
         self._key_path = key_path
 
+    def _update_brain_host_from_request(self) -> None:
+        """Auto-detect Brain host from the caller when Brain is enabled.
+
+        If [Brain].enabled is true and no host has been configured yet,
+        we treat the remote address of the incoming WebHashcat request as
+        the Brain server host. This keeps node configuration minimal: only
+        ``enabled``, ``port`` and ``password`` are required in settings.ini.
+        """
+
+        try:
+            brain_cfg = getattr(Hashcat, "brain", None)
+        except Exception:  # pragma: no cover - extremely defensive
+            return
+
+        if not isinstance(brain_cfg, dict):
+            return
+
+        enabled = str(brain_cfg.get("enabled", "false")).lower() == "true"
+        if not enabled:
+            return
+
+        current_host = str(brain_cfg.get("host", "") or "").strip()
+        if current_host:
+            # Respect an explicit host (from settings.ini or previous detection).
+            return
+
+        hinted_host = str(request.headers.get("X-Hashcat-Brain-Host", "") or "").strip()
+        if hinted_host:
+            brain_cfg["host"] = hinted_host
+            Hashcat.brain = brain_cfg
+            LOGGER.info("Auto-detected Brain host from header: %s", hinted_host)
+            return
+
+        # Prefer an explicit X-Forwarded-For header if present (behind proxies),
+        # otherwise fall back to the direct remote address.
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else request.remote_addr
+
+        if not client_ip:
+            return
+
+        brain_cfg["host"] = client_ip
+        Hashcat.brain = brain_cfg
+        LOGGER.info("Auto-detected Brain host from incoming request: %s", client_ip)
+
     def _route(self):
         self._app.add_url_rule("/hashcatInfo", "hashcatInfo", self._hashcatInfo, methods=["GET"])
         self._app.add_url_rule("/sessionInfo/<session_name>", "sessionInfo", self._sessionInfo, methods=["GET"])
@@ -95,6 +140,9 @@ class Server:
     @auth.login_required
     def _hashcatInfo(self):
         try:
+            # Learn Brain host from the first authenticated call, if needed.
+            self._update_brain_host_from_request()
+
             hash_types = [Hashcat.hash_modes[idx] for idx in sorted(Hashcat.hash_modes.keys())]
             rules = Hashcat.rules
             masks = Hashcat.masks
@@ -108,6 +156,9 @@ class Server:
                     "progress": session.progress,
                 })
 
+            brain_enabled = str(Hashcat.brain.get("enabled", "false")).lower() == "true"
+            brain_host = str(Hashcat.brain.get("host", "") or "").strip()
+
             result = {
                 "response": "ok",
                 "version": Hashcat.version,
@@ -118,6 +169,9 @@ class Server:
                 "sessions": sessions,
                 "wordlists": wordlists,
                 "device_type": Hashcat.default_device_type,
+                # Expose Brain enablement so the Web UI can build Brain clusters.
+                "brain_enabled": brain_enabled,
+                "brain_host_set": brain_enabled and bool(brain_host),
             }
 
             return json.dumps(result)
@@ -259,6 +313,9 @@ class Server:
     @auth.login_required
     def _createSession(self):
         try:
+            # Ensure Brain host is initialised before we schedule a new session.
+            self._update_brain_host_from_request()
+
             data = json.loads(request.form.get('json'))
 
             random_name = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(12))
@@ -325,6 +382,9 @@ class Server:
     @auth.login_required
     def _action(self):
         try:
+            # Sessions may be started by this endpoint; make sure Brain host is set.
+            self._update_brain_host_from_request()
+
             data = json.loads(request.data.decode())
 
             if data["action"] == "start":
@@ -496,16 +556,15 @@ class Server:
                     continue
                 Hashcat.remove_wordlist(extra)
 
-            # Hashfiles: only prune extras based on manifest names
+            # Hashfiles: do not prune here because session-specific copies have
+            # randomised names (hashcat creates a new .list per session). Just
+            # report which manifest entries are missing, leaving all existing
+            # files untouched.
             local_hashfiles = set(manifest.get("hashfiles", []))
             try:
                 remote_hashfiles = set(os.listdir(Hashcat.hash_dir))
             except Exception:
                 remote_hashfiles = set()
-            for extra in remote_hashfiles - local_hashfiles:
-                if extra == ".gitkeep":
-                    continue
-                Hashcat.remove_hashfile(extra)
             for name in local_hashfiles:
                 if name not in remote_hashfiles:
                     missing["hashfiles"].append(name)

@@ -12,6 +12,7 @@ urlpatterns = [
     re_path(r'^hashfiles$', views.api_hashfiles, name='api_hashfiles'),
     re_path(r'^hashfile_sessions$', views.api_hashfile_sessions, name='api_hashfile_sessions'),
     re_path(r'^session_action$', views.api_session_action, name='api_session_action'),
+    re_path(r'^cluster_action$', views.api_cluster_action, name='api_cluster_action'),
     re_path(r'^hashfile_action$', views.api_hashfile_action, name='api_hashfile_action'),
     re_path(r'^hashfile_cracked/(.*)$', views.api_hashfile_cracked, name='api_hashfile_cracked'),
     re_path(r'^hashfile_top_password/(.*)/(.*)$', views.api_hashfile_top_password, name='api_hashfile_top_password'),

@@ -161,7 +161,9 @@ def _build_settings(config: configparser.ConfigParser) -> NodeSettings:
         cert_file=cert_file,
         key_file=key_file,
         brain_enabled=config['Brain']['enabled'],
-        brain_host=config['Brain']['host'],
+        # ``host`` is optional; when omitted the node can auto-detect it
+        # from incoming WebHashcat requests.
+        brain_host=config['Brain'].get('host', ''),
         brain_port=config['Brain']['port'],
         brain_password=config['Brain']['password'],
     )

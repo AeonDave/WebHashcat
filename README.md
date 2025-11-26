@@ -90,15 +90,15 @@ docker compose --profile pocl up -d --build          # Generic CPU/OpenCL
 ### 4. Register and synchronise a node
 
 1. Open `http://127.0.0.1:8000` and go to **Nodes**.
-2. Create a node with hostname `hashcatnode-cpu` (or `hashcatnode-cuda`), port `9999`, and the credentials configured above.
+2. Create a node with the hostname of the running container and port `9999` (e.g. `hashcatnode-cuda`, `hashcatnode-amd-gpu`, `hashcatnode-intel-gpu`, `hashcatnode-intel-cpu`, or `hashcatnode-pocl` depending on the profile you started) and the credentials configured above.
 3. Open the node detail page and click **Synchronise**. Rules, masks, wordlists, and hash type metadata are pushed to the node.
 
 Tip: Nodes on other machines do not need the shared Docker network. Just publish port 9999 on the host and register the node with that host/IP in the Web UI.
 
 ### 5. Upload assets and launch sessions
 
-- Use **Hashcat → Files** to upload hashfiles, wordlists, masks, and rules. Uploaded files stay under `WebHashcat/Files/**` until removed. Drag & drop supports multiple files per category; compressed wordlists (`.gz`, `.zip`) remain compressed on disk and are used directly by hashcat.
-- From **Hashcat → Hashfiles**, click **Add** to import a new hashfile. Use the `+` button beside a hashfile to define a cracking session, then hit **Play** to start it.
+- Use **Hashcat > Files** to upload hashfiles, wordlists, masks, and rules. Uploaded files stay under `WebHashcat/Files/**` until removed. Drag & drop supports multiple files per category; compressed wordlists (`.gz`, `.zip`) remain compressed on disk and are used directly by hashcat.
+- From **Hashcat > Hashfiles**, click **Add** to import a new hashfile. Use the `+` button beside a hashfile to define a cracking session, then hit **Play** to start it.
 - Sessions stream progress back to the UI; Celery workers keep the potfile and cracked counts in sync.
 
 ### 6. Using Hashcat Brain with multiple nodes
@@ -109,24 +109,63 @@ At a high level you need:
 
 1. A running **brain server** (native hashcat component).
 2. One or more **HashcatNode** instances configured to talk to that brain server.
-3. One or more **sessions** against the same hashfile and attack, each running on a different node with `brain_mode` set to a value other than `0`.
+3. One or more sessions created by choosing **Brain cluster** in the Node field of the UI: a session is generated for every Brain-enabled node (with a detected host) and hashcat runs in Brain mode 3.
 
 #### 6.1 Start the brain server
 
-On any machine reachable from all your nodes (this can be the same host as a node or a separate box), start hashcat in brain-server mode, for example:
+You can run the brain server in two ways:
 
-```bash
-hashcat --brain-server \
-        --brain-host 0.0.0.0 \
-        --brain-port 13743 \
-        --brain-password superSecretBrainPw
-```
+1. **Docker service in the WebHashcat stack (recommended)**  
+   The `WebHashcat/docker-compose.yml` file includes a `brain` service that starts a dedicated container running `hashcat --brain-server`. The service reuses the same upstream image family as the default CPU node profile:
 
-Notes:
+   ```yaml
+   services:
+     brain:
+       image: dizcza/docker-hashcat:pocl
+       container_name: webhashcat-brain
+       command:
+         - /usr/local/bin/hashcat
+         - --brain-server
+         - --brain-host
+         - 0.0.0.0
+         - --brain-port
+         - "13743"
+         - --brain-password
+         - bZfhCvGUSjRq
+       restart: unless-stopped
+       networks:
+         - webhashcat
+       ports:
+         - "13743:13743"
+   ```
 
-- `--brain-host` should normally be `0.0.0.0` on the server so that remote nodes can connect, or a specific interface if you want to restrict it.
-- Ensure that the chosen `--brain-port` is reachable from every HashcatNode (firewall/NAT rules).
-- The `--brain-password` must match what you configure on every node.
+   When you run:
+
+   ```bash
+   cd WebHashcat/
+   docker compose up -d --build
+   ```
+
+   the `brain` service is started together with the web, Celery, database, and Redis containers. Inside the shared Docker network `webhashcat-net`, the brain server is reachable as `webhashcat-brain:13743`.
+
+   - HashcatNode containers attached to the same `webhashcat-net` network should use `host = webhashcat-brain` and `port = 13743` in their `[Brain]` section.
+   - Nodes running on other hosts can connect to the exposed host port `13743` using the Docker host IP/hostname.
+
+2. **Manual (bare-metal or custom) brain server**  
+   On any machine reachable from all your nodes (this can be the same host as a node or a separate box), you can also start hashcat in brain-server mode directly:
+
+   ```bash
+   hashcat --brain-server \
+           --brain-host 0.0.0.0 \
+           --brain-port 13743 \
+           --brain-password superSecretBrainPw
+   ```
+
+   Notes for the manual mode:
+
+   - `--brain-host` should normally be `0.0.0.0` on the server so that remote nodes can connect, or a specific interface if you want to restrict it.
+   - Ensure that the chosen `--brain-port` is reachable from every HashcatNode (firewall/NAT rules).
+   - The `--brain-password` must match what you configure on every node.
 
 #### 6.2 Configure each node to use the shared brain server
 
@@ -135,16 +174,18 @@ On every HashcatNode instance (Docker or bare-metal), edit `HashcatNode/settings
 ```ini
 [Brain]
 enabled = true
-host = <brain_server_ip_or_hostname>
 port = 13743
 password = superSecretBrainPw
 ```
 
 Keep the following points in mind:
 
-- All nodes that should share work **must point to the same host/port/password**.
+- All nodes that should share work **must use a compatible port/password pair**.
 - `enabled` must be `true` (or `"true"` in the final config) or the node will ignore Brain entirely, even if sessions request it.
 - When you change `settings.ini`, restart the HashcatNode process or container so the new configuration is applied.
+- If you **omit** the `host` key (as in the example above), the node will automatically treat the remote address of the WebHashcat server that connects to it as the Brain host. This makes configuration minimal: you only need `enabled`, `port` and `password`, and the node learns where the Brain server is from the first incoming authenticated request.
+- If you prefer to use a dedicated Brain host (for example the `webhashcat-brain` service from the Docker stack or a separate machine), you can still add an explicit `host = <brain_server_ip_or_hostname>` line under `[Brain]`. When `host` is set explicitly, the node will always use that value instead of auto-detecting it.
+- The WebHashcat app can also *hint* the Brain host to nodes via the HTTP header `X-Hashcat-Brain-Host` when the environment variable `HASHCAT_BRAIN_HOST` is set. In the provided `docker-compose.yml` this defaults to `webhashcat-brain`, so nodes on the same Docker network learn the correct hostname automatically; override it to a routable address (e.g. the public IP of the WebHashcat host) if your nodes run elsewhere.
 
 #### 6.3 Run multiple nodes
 
@@ -153,7 +194,7 @@ You can run several nodes on the same physical host (with different ports and/or
 - **Docker:** just start multiple node containers (possibly with different profiles) on different hosts, all attached to the same network and pointing to the shared brain server as above.
 - **Bare-metal:** install HashcatNode on each machine following the manual installation section and configure each one's `settings.ini` with the same Brain settings.
 
-In the Web UI, register each node under **Nodes → Add node** with:
+In the Web UI, register each node under **Nodes > Add node** with:
 
 - the node's hostname or IP,
 - the HTTPS port (default `9999`),
@@ -165,25 +206,16 @@ Use **Synchronise** on each node page so rules, masks, and wordlists are availab
 
 Once the brain server and nodes are configured:
 
-1. Go to **Hashcat → Hashfiles** and import or select the hashfile you want to attack.
-2. Click the `+` button beside that hashfile to define a new session.
+1. Go to **Hashcat > Hashfiles** and import or select the hashfile you want to attack.
+2. Click the + button beside that hashfile to define a new session.
 3. In the **New session** modal:
    - Choose the attack type (dictionary or mask) and parameters (rules, wordlists, masks) as usual.
-   - For **Node**, pick one of the registered nodes.
-   - For **Brain**, choose a mode other than `Disabled` (`Send hashed passwords`, `Send attack positions`, or `Send hashed passwords and attack positions`).
-4. Save the session.
-5. Repeat the same steps for the **same hashfile** and attack parameters, but select a **different node** each time (still with a non-zero Brain mode).
-6. Start all those sessions (from the hashfile detail view or the global sessions view).
+   - For **Node**, select **Brain cluster (all Brain-enabled nodes)**. This creates one session per node that has Brain enabled and a detected Brain host, always with brain_mode = 3.
+4. Start the cluster: the Start/Pause/Resume/Stop/Remove buttons act on the whole group.
 
-All running sessions that:
-
-- point to the same hashfile contents,
-- use the same attack configuration (same mask or rules/wordlist), and
-- have Brain enabled (`brain_mode` ≠ 0 and `[Brain].enabled = true` on the node),
-
-will connect to the shared brain server. The brain server tracks which keyspace regions have already been attempted and instructs each client to skip duplicates, effectively distributing work across your nodes.
-
-If you prefer to keep data more private, you can pick `Send attack positions` (mode 2), which only shares keyspace positions and not candidate hashes; mode 3 shares both and gives the most complete deduplication.
+Notes:
+- To use a single node without Brain, pick that node (not the cluster option); Brain is disabled in that case (brain_mode = 0).
+- Make sure nodes show Brain status as Enabled with a detected host in **Nodes**; only those join the cluster.
 
 Screenshots:
 
@@ -196,7 +228,7 @@ Screenshots:
 ## Managing nodes and assets
 
 - Rules, masks, and wordlists can be uploaded through the UI or via `Utils/upload_file.py`. Synchronise a node to push updated versions (MD5 checks prevent redundant uploads).
-- Rotate node credentials with `python manage.py rotate_node_passwords [--node-name NODE]` to generate new passwords, then copy the reported username/password/hash into the node’s secret files or secret store.
+- Rotate node credentials with `python manage.py rotate_node_passwords [--node-name NODE]` to generate new passwords, then copy the reported username/password/hash into the node's secret files or secret store.
 - Hash types are now parsed from `hashcat -hh`, so new hashcat releases only require rebuilding the node container with a newer `HASHCAT_VERSION`.
 - Each cracking session stores its own potfile and optional debug output under `HashcatNode/potfiles` and `HashcatNode/outputs`. Start, pause, resume, and quit actions can be issued from the Web UI.
 - Windows nodes still allow only one running session at a time (hashcat limitation).

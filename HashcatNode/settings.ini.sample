@@ -16,7 +16,6 @@ mask_dir = /hashcatnode/masks
 workload_profile = 3
 
 [Brain]
-enabled = false
-host = 127.0.0.1
+enabled = true
 port = 13743
 password = bZfhCvGUSjRq

@@ -10,9 +10,7 @@ HashcatNode/hashcatnode.log
 # --- Uploaded / generated files ---
 WebHashcat/Files/potfile*
 WebHashcat/Files/tmp/*
-!WebHashcat/Files/tmp/.gitkeep
 WebHashcat/Files/Hashfiles/**
-!WebHashcat/Files/Hashfiles/.gitkeep
 WebHashcat/Files/Crackedfiles/*.crackedfile
 WebHashcat/Files/Maskfiles/*.hcmask
 WebHashcat/Files/Rulefiles/*.rule
@@ -22,17 +20,17 @@ WebHashcat/Files/**/*.gz
 WebHashcat/Files/**/*.7z
 WebHashcat/Files/**/*.json
 WebHashcat/Files/Searches/**
-!WebHashcat/Files/Searches/.gitkeep
+!WebHashcat/**/.gitkeep
 
 # --- Hashcat node assets ---
-HashcatNode/*.crt
-HashcatNode/*.key
-HashcatNode/hashes/*.list
-HashcatNode/rules/*.rule
-HashcatNode/masks/*.hcmask
-HashcatNode/potfiles/*.potfile
-HashcatNode/wordlists/*.wordlist
-HashcatNode/outputs/*.output
+HashcatNode/**/*.crt
+HashcatNode/**/*.key
+HashcatNode/**/*.list
+HashcatNode/**/*.rule
+HashcatNode/**/*.hcmask
+HashcatNode/**/*.potfile
+HashcatNode/**/*.wordlist
+HashcatNode/**/*.output
 HashcatNode/**/*.zip
 HashcatNode/**/*.gz
 HashcatNode/**/*.7z

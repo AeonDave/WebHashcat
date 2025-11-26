@@ -101,16 +101,20 @@
             <input type="hidden" name="crack_type" value="dictionary">
             <input type="hidden" id="hashfile_id_dict" name="hashfile_id">
             <div class="md:col-span-2">
-              <div class="text-sm mb-1">Device type</div>
+              <div class="text-sm mb-1">Device / cluster mode</div>
               <div id="device_type_label_dict" class="text-primary text-sm">Detecting from node.</div>
               <input type="hidden" name="device_type" id="device_type_input_dict" value="1">
             </div>
-            <label class="block text-sm">Node
+            <label class="block text-sm">Node / Brain cluster
               <select name="node" id="node_dict" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
                 {% for node in node_list %}
                 <option value="{{ node.name }}">{{ node.name }}</option>
                 {% endfor %}
+                <option value="__brain_cluster__">Brain cluster (all Brain-enabled nodes)</option>
               </select>
+              <p class="text-xs text-gray-400 mt-1">
+                Se scegli "Brain cluster" verranno create più sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
+              </p>
             </label>
             <label class="block text-sm">Hash type
               <select id="hash_type_dict" name="hash_type" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
@@ -133,17 +137,6 @@
                 <option value="{{ wordlist.name }}">{{ wordlist.name }}</option>
                 {% endfor %}
               </select>
-            </label>
-            <label class="block text-sm">Brain
-              <select name="brain_mode" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
-                <option value="0">Disabled</option>
-                <option value="1">Send hashed passwords</option>
-                <option value="2">Send attack positions</option>
-                <option value="3">Send hashed passwords and attack positions</option>
-              </select>
-              <p class="text-xs text-gray-400 mt-1">
-                  To distribute the load across multiple nodes, configure all nodes to use the same brain server in `HashcatNode/settings.ini` and start multiple sessions on the same hashfile with Brain enabled.
-              </p>
             </label>
             <label class="block text-sm">End date (optional)
               <input type="text" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1" name="end_datetime" id="end_dict">
@@ -175,12 +168,16 @@
               <div id="device_type_label_mask" class="text-primary text-sm">Detecting from node.</div>
               <input type="hidden" name="device_type" id="device_type_input_mask" value="1">
             </div>
-            <label class="block text-sm">Node
+            <label class="block text-sm">Node / Brain cluster
               <select name="node" id="node_mask" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
                 {% for node in node_list %}
                 <option value="{{ node.name }}">{{ node.name }}</option>
                 {% endfor %}
+                <option value="__brain_cluster__">Brain cluster (all Brain-enabled nodes)</option>
               </select>
+              <p class="text-xs text-gray-400 mt-1">
+                Se scegli "Brain cluster" verranno create più sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
+              </p>
             </label>
             <label class="block text-sm">Mask
               <select name="mask" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
@@ -214,12 +211,13 @@
 </div>
 
 <script src="{% static 'js/cache.js' %}"></script>
-<script>
-    window.hashesConfig = {
+    <script>
+        window.hashesConfig = {
       nodeStatusUrl: "{% url 'API:api_node_status' %}",
       hashfilesUrl: "{% url 'API:api_hashfiles' %}",
       hashfileSessionsUrl: "{% url 'API:api_hashfile_sessions' %}",
       sessionActionUrl: "{% url 'API:api_session_action' %}",
+      clusterActionUrl: "{% url 'API:api_cluster_action' %}",
       hashfileActionUrl: "{% url 'API:api_hashfile_action' %}",
       messagesUrl: "{% url 'API:api_get_messages' %}",
       nodeDeviceMap: {{ node_device_map_json|default:"{}"|safe }},

@@ -120,11 +120,20 @@ class NodeSyncTests(TestCase):
 
         mock_api = MagicMock()
         mock_api.get_hashcat_info.return_value = node_data
+        mock_api.compare_assets.return_value = {
+            "response": "ok",
+            "missing": {
+                "rules": ["common.rule"],
+                "masks": ["basic.hcmask"],
+                "wordlists": ["list.wordlist"],
+                "hashfiles": [],
+            },
+        }
         mock_api_cls.return_value = mock_api
 
         url = reverse("Nodes:node", args=[self.node.name])
         response = self.client.post(url, {"action": "synchronize"})
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
 
         mock_api.upload_rule.assert_called_once()
         mock_api.upload_mask.assert_called_once()
