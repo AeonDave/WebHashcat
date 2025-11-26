@@ -27,11 +27,6 @@ RUN sed -i 's/\r$//' /webhashcat/entrypoint.sh && \
     chmod +x /webhashcat/entrypoint.sh && \
     chmod 777 /webhashcat/Files/tmp
 
-# Prepare configuration from *.docker templates
-RUN mv /webhashcat/WebHashcat/settings.py.docker /webhashcat/WebHashcat/settings.py && \
-    mv /webhashcat/settings.ini.docker /webhashcat/settings.ini
-
 EXPOSE 8000
 
 ENTRYPOINT ["/webhashcat/entrypoint.sh"]
-

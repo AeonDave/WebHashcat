@@ -59,28 +59,31 @@ class MainEntrypointTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.settings_path = Path(self.tmp.name) / "settings.ini"
-        self.cert_dir = Path(self.tmp.name) / "certs"
+        self.base_dir = Path(self.tmp.name)
+        self.cert_dir = self.base_dir / "certs"
         self.cert_dir.mkdir(parents=True, exist_ok=True)
         self.cert_file = self.cert_dir / "server.crt"
         self.key_file = self.cert_dir / "server.key"
 
-        self.settings_path.write_text(
-            "[General]\nloglevel=info\n"
-            "[Server]\nbind=0.0.0.0\nport=9999\nusername=user\nsha256hash=\n"
-            "[Hashcat]\nbinary=/bin/true\nhashes_dir=/tmp\nrule_dir=/tmp\nwordlist_dir=/tmp\nmask_dir=/tmp\nworkload_profile=2\n"
-            "[Brain]\nenabled=false\nport=13743\npassword=brainpw\n",
-            encoding="utf-8",
-        )
+        self.env_common = {
+            "HASHCATNODE_USERNAME": "envuser",
+            "HASHCATNODE_PASSWORD": "envpass",
+            "HASHCATNODE_CERT_PATH": str(self.cert_file),
+            "HASHCATNODE_KEY_PATH": str(self.key_file),
+            "HASHCATNODE_HASHES_DIR": str(self.base_dir / "hashes"),
+            "HASHCATNODE_RULES_DIR": str(self.base_dir / "rules"),
+            "HASHCATNODE_MASKS_DIR": str(self.base_dir / "masks"),
+            "HASHCATNODE_WORDLISTS_DIR": str(self.base_dir / "wordlists"),
+            "HASHCATNODE_OUTPUTS_DIR": str(self.base_dir / "outputs"),
+            "HASHCATNODE_POTFILES_DIR": str(self.base_dir / "potfiles"),
+            "HASHCATNODE_DB_PATH": str(self.base_dir / "data" / "hashcatnode.db"),
+            "HASHCATNODE_BIND": "0.0.0.0",
+            "HASHCATNODE_PORT": "9999",
+            "HASHCATNODE_BINARY": "/bin/true",
+        }
 
     def test_main_reads_env_overrides(self):
-        with mock.patch("HashcatNode.hashcatnode.SETTINGS_PATH", self.settings_path), \
-                mock.patch.dict(os.environ, {
-                    "HASHCATNODE_USERNAME": "envuser",
-                    "HASHCATNODE_PASSWORD": "envpass",
-                    "HASHCATNODE_CERT_PATH": str(self.cert_file),
-                    "HASHCATNODE_KEY_PATH": str(self.key_file),
-                }, clear=False), \
+        with mock.patch.dict(os.environ, self.env_common, clear=False), \
                 mock.patch("HashcatNode.hashcatnode._ensure_tls_material",
                            return_value=(str(self.cert_file), str(self.key_file))), \
                 mock.patch("HashcatNode.hashcatnode.Server") as mock_server, \
@@ -96,20 +99,23 @@ class MainEntrypointTests(unittest.TestCase):
         self.assertEqual(args[6], str(self.key_file))
 
     def test_build_settings_constructs_dataclass(self):
-        with mock.patch("HashcatNode.hashcatnode.SETTINGS_PATH", self.settings_path), \
-                mock.patch.dict(os.environ, {"HASHCATNODE_PASSWORD": "pw"}, clear=False), \
+        env = dict(self.env_common)
+        env["HASHCATNODE_PASSWORD"] = "pw"
+        env["HASHCATNODE_BRAIN_ENABLED"] = "true"
+        env["HASHCATNODE_BRAIN_PASSWORD"] = "brainpw"
+        env["HASHCATNODE_BRAIN_PORT"] = "13743"
+        with mock.patch.dict(os.environ, env, clear=False), \
                 mock.patch("HashcatNode.hashcatnode._ensure_tls_material",
                         return_value=(str(self.cert_file), str(self.key_file))):
-            config = hashcatnode._read_config()
-            settings = hashcatnode._build_settings(config)
+            settings = hashcatnode._build_settings()
 
         self.assertEqual(settings.bind_address, "0.0.0.0")
         self.assertEqual(settings.bind_port, 9999)
-        self.assertEqual(settings.username, "user")
+        self.assertEqual(settings.username, "envuser")
         self.assertEqual(settings.binary, "/bin/true")
         self.assertEqual(settings.cert_file, str(self.cert_file))
         self.assertEqual(settings.brain_host, "")
-        self.assertEqual(settings.brain_enabled, "false")
+        self.assertEqual(settings.brain_enabled, "true")
 
     def test_apply_to_hashcat_sets_attributes(self):
         settings = hashcatnode.NodeSettings(

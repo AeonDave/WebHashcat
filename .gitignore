@@ -95,7 +95,6 @@ instance/
 .python-version
 celerybeat-schedule
 .env
-.env.*
 *.env
 .spyderproject
 .ropeproject

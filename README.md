@@ -46,46 +46,45 @@ WebHashcat (Modernized) exposes the hashcat CLI through a Django application and
 
 Requirements: Docker Engine 24+, the `docker compose` plugin 2.29+, and the matching GPU runtime (NVIDIA Container Toolkit for CUDA, /dev/dri for Intel GPU, standard OpenCL for AMD/POCL).
 
-### 1. Start the web stack
+### 1. Prepare the shared `.env` file
+
+```
+cp .env.example .env
+```
+
+A single `.env` file powers both WebHashcat and HashcatNode: credentials, Brain, hashcat paths, and database settings. The old `settings.ini` and `variables.env` files are no longer used.
+
+Key variables in `.env`:
+- WebHashcat: `SECRET_KEY`, `DEBUG`, `DJANGO_SUPERUSER_*`, `MYSQL_*`, `HASHCAT_CACHE_*`, `HASHCAT_BRAIN_HOST`.
+  - If `SECRET_KEY` is unset or set to `[generate]`, a random value is generated at container start.
+- HashcatNode: `HASHCATNODE_USERNAME` / `HASHCATNODE_PASSWORD`, `HASHCATNODE_BIND` / `HASHCATNODE_PORT`, `HASHCATNODE_BINARY`, `HASHCATNODE_HASHES_DIR` / `RULES_DIR` / `WORDLISTS_DIR` / `MASKS_DIR`, `HASHCATNODE_WORKLOAD_PROFILE`, `HASHCATNODE_BRAIN_*` (by default the password falls back to `HASHCAT_BRAIN_PASSWORD`; set `HASHCATNODE_BRAIN_PASSWORD` only if you need a different one).
+
+### 2. Start the web stack
 
 ```
 cd WebHashcat/
-docker compose up -d --build
+docker compose --env-file ../.env up -d --build
 ```
 
-- Creates the shared bridge network `webhashcat-net`.
-- Starts MySQL, Redis, the Django web container, and the Celery worker. Files under `WebHashcat/Files` are bind-mounted.
-- The UI listens on `http://127.0.0.1:8000` (credentials come from `variables.env`).
-
-### 2. Prepare node config and secrets
-
-HashcatNode reads static settings (paths, bind, workload) from `HashcatNode/settings.ini` (auto-copied from the sample in Docker) and credentials from files or env vars:
-
-- Preferred: write username/password to `HashcatNode/secrets/hashcatnode_username` and `HashcatNode/secrets/hashcatnode_password` (mounted into the container at `/run/secrets/...` by default). You can rotate them with `python manage.py rotate_node_passwords` in the Django app and refresh the files accordingly.
-- Optional: set `HASHCATNODE_USERNAME` / `HASHCATNODE_PASSWORD` or `HASHCATNODE_HASH` env vars; these override `settings.ini`. Avoid storing passwords in `settings.ini` when secrets/env are available.
-- Paths (`HASHCATNODE_HASHES_DIR`, `..._RULES_DIR`, etc.) default to the Docker volume mounts; adjust via env if you change the volume layout.
-- The node's SQLite database is stored in a Docker named volume (`hashcatnode-db`) mounted at `/hashcatnode/data`, driven by `HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db`. No manual file creation is needed.
-- Hashcat 7.1.x supports compressed wordlists on-the-fly (`.gz`, `.zip`); uploads remain compressed on disk and are used directly by hashcat.
+- Creates the `webhashcat-net` bridge network.
+- Starts MySQL, Redis, the Django container, and the Celery worker. `WebHashcat/Files` is bind-mounted.
+- The UI listens on `http://127.0.0.1:8000` (credentials are taken from `.env`).
 
 ### 3. Start one or more nodes
 
 ```
+# from the repo root
 cd HashcatNode/
-
-# GPU builds
-docker compose --profile cuda up -d --build          # Nvidia CUDA
-docker compose --profile amd-gpu up -d --build       # AMD/OpenCL (tag :latest)
-docker compose --profile intel-gpu up -d --build     # Intel GPU (/dev/dri)
-
-# CPU builds
-docker compose --profile intel-cpu up -d --build     # Intel OpenCL CPU
-docker compose --profile pocl up -d --build          # Generic CPU/OpenCL
+docker compose --env-file ../.env --profile cuda up -d --build          # Nvidia CUDA
+docker compose --env-file ../.env --profile amd-gpu up -d --build       # AMD/OpenCL (tag :latest)
+docker compose --env-file ../.env --profile intel-gpu up -d --build     # Intel GPU (/dev/dri)
+docker compose --env-file ../.env --profile intel-cpu up -d --build     # Intel OpenCL CPU
+docker compose --env-file ../.env --profile pocl up -d --build          # Generic CPU/OpenCL
 ```
 
-- Nodes automatically attach to `webhashcat-net`. Pick the profile that matches your hardware (CUDA/AMD/Intel GPU/CPU).
-- CUDA profile expects `nvidia-container-toolkit`; Intel GPU needs `/dev/dri`; AMD/OpenCL uses the upstream `:latest` tag; CPU profiles work everywhere.
-- Override the Basic-Auth credentials by editing the secret files described above or by providing `HASHCATNODE_USERNAME[_FILE]` / `HASHCATNODE_PASSWORD[_FILE]` / `HASHCATNODE_HASH[_FILE]` env vars.
-- TLS material is generated on first boot inside `/hashcatnode/certs`. Mount your own cert/key pair and set `HASHCATNODE_CERT_PATH` / `HASHCATNODE_KEY_PATH` if you want trusted certificates.
+- All profiles use the same `.env` file (Basic Auth, Brain, paths). The device type is fixed in the profile (`HASHCATNODE_DEVICE_TYPE=1` CPU, `2` GPU).
+- CUDA profiles require `nvidia-container-toolkit`; Intel GPU profiles mount `/dev/dri`; AMD/OpenCL uses the `:latest` tag; CPU profiles work everywhere.
+- TLS material is generated on first start under `/hashcatnode/certs`; you can mount your own certificates and point `HASHCATNODE_CERT_PATH` / `HASHCATNODE_KEY_PATH` to them via `.env`.
 
 ### 4. Register and synchronise a node
 
@@ -148,7 +147,7 @@ You can run the brain server in two ways:
 
    the `brain` service is started together with the web, Celery, database, and Redis containers. Inside the shared Docker network `webhashcat-net`, the brain server is reachable as `webhashcat-brain:13743`.
 
-   - HashcatNode containers attached to the same `webhashcat-net` network should use `host = webhashcat-brain` and `port = 13743` in their `[Brain]` section.
+   - HashcatNode containers attached to the same `webhashcat-net` network should use `HASHCATNODE_BRAIN_HOST=webhashcat-brain` and `HASHCATNODE_BRAIN_PORT=13743` (these defaults are already in `.env.example`).
    - Nodes running on other hosts can connect to the exposed host port `13743` using the Docker host IP/hostname.
 
 2. **Manual (bare-metal or custom) brain server**  
@@ -169,36 +168,35 @@ You can run the brain server in two ways:
 
 #### 6.2 Configure each node to use the shared brain server
 
-On every HashcatNode instance (Docker or bare-metal), edit `HashcatNode/settings.ini` and update the **[Brain]** section:
+On every HashcatNode instance (Docker or bare-metal), set these env vars (in `.env` for Docker):
 
-```ini
-[Brain]
-enabled = true
-port = 13743
-password = superSecretBrainPw
+```
+HASHCATNODE_BRAIN_ENABLED=true
+HASHCATNODE_BRAIN_PORT=13743
+HASHCATNODE_BRAIN_PASSWORD=<shared_password>
+# Optional: force host; otherwise it is auto-detected from the incoming WebHashcat request
+HASHCATNODE_BRAIN_HOST=webhashcat-brain
 ```
 
 Keep the following points in mind:
 
-- All nodes that should share work **must use a compatible port/password pair**.
-- `enabled` must be `true` (or `"true"` in the final config) or the node will ignore Brain entirely, even if sessions request it.
-- When you change `settings.ini`, restart the HashcatNode process or container so the new configuration is applied.
-- If you **omit** the `host` key (as in the example above), the node will automatically treat the remote address of the WebHashcat server that connects to it as the Brain host. This makes configuration minimal: you only need `enabled`, `port` and `password`, and the node learns where the Brain server is from the first incoming authenticated request.
-- If you prefer to use a dedicated Brain host (for example the `webhashcat-brain` service from the Docker stack or a separate machine), you can still add an explicit `host = <brain_server_ip_or_hostname>` line under `[Brain]`. When `host` is set explicitly, the node will always use that value instead of auto-detecting it.
-- The WebHashcat app can also *hint* the Brain host to nodes via the HTTP header `X-Hashcat-Brain-Host` when the environment variable `HASHCAT_BRAIN_HOST` is set. In the provided `docker-compose.yml` this defaults to `webhashcat-brain`, so nodes on the same Docker network learn the correct hostname automatically; override it to a routable address (e.g. the public IP of the WebHashcat host) if your nodes run elsewhere.
+- All nodes that should share work **must use the same port/password**.
+- `HASHCATNODE_BRAIN_ENABLED` must be true or the node will ignore Brain even if sessions request it.
+- If `HASHCATNODE_BRAIN_HOST` is empty, the node auto-detects the caller IP and caches it; the Web app also hints it via `X-Hashcat-Brain-Host` (value from `HASHCAT_BRAIN_HOST`, default `webhashcat-brain`).
+- Restart a node container after changing Brain env vars so they take effect.
 
 #### 6.3 Run multiple nodes
 
 You can run several nodes on the same physical host (with different ports and/or GPUs) or on separate machines.
 
 - **Docker:** just start multiple node containers (possibly with different profiles) on different hosts, all attached to the same network and pointing to the shared brain server as above.
-- **Bare-metal:** install HashcatNode on each machine following the manual installation section and configure each one's `settings.ini` with the same Brain settings.
+- **Bare-metal:** install HashcatNode on each machine following the manual installation section and configure each one's Brain env vars the same way.
 
 In the Web UI, register each node under **Nodes > Add node** with:
 
 - the node's hostname or IP,
 - the HTTPS port (default `9999`),
-- the Basic Auth credentials configured via secrets/env on that node.
+- the Basic Auth credentials configured via env on that node.
 
 Use **Synchronise** on each node page so rules, masks, and wordlists are available everywhere.
 
@@ -228,7 +226,7 @@ Screenshots:
 ## Managing nodes and assets
 
 - Rules, masks, and wordlists can be uploaded through the UI or via `Utils/upload_file.py`. Synchronise a node to push updated versions (MD5 checks prevent redundant uploads).
-- Rotate node credentials with `python manage.py rotate_node_passwords [--node-name NODE]` to generate new passwords, then copy the reported username/password/hash into the node's secret files or secret store.
+- Rotate node credentials with `python manage.py rotate_node_passwords [--node-name NODE]` to generate new passwords, then copy the reported username/password/hash into the node's `.env`.
 - Hash types are now parsed from `hashcat -hh`, so new hashcat releases only require rebuilding the node container with a newer `HASHCAT_VERSION`.
 - Each cracking session stores its own potfile and optional debug output under `HashcatNode/potfiles` and `HashcatNode/outputs`. Start, pause, resume, and quit actions can be issued from the Web UI.
 - Windows nodes still allow only one running session at a time (hashcat limitation).
@@ -255,7 +253,7 @@ Docker is strongly recommended, but bare-metal steps remain for completeness.
    pip3 install -r requirements.txt
    # On Windows also run: pip3 install pywin32
    ```
-2. Copy `settings.ini.sample` to `settings.ini`, then set the hashcat binary path, hashes/rules/wordlists/masks directories, bind host/port, and credentials.
+2. Export the required env vars (see `.env.example` for defaults): at minimum `HASHCATNODE_USERNAME`/`HASHCATNODE_PASSWORD`, `HASHCATNODE_BIND`/`HASHCATNODE_PORT`, `HASHCATNODE_BINARY`, asset directories (`HASHCATNODE_HASHES_DIR`, etc.), and optional Brain env vars.
 3. Initialise local resources:
    ```
    python3 create_database.py
@@ -284,8 +282,7 @@ Limitations and dependencies:
    GRANT ALL PRIVILEGES ON webhashcat.* TO 'webhashcat';
    ```
 3. Configure Django:
-   - Copy `WebHashcat/settings.py.sample` to `WebHashcat/settings.py`, then set `SECRET_KEY`, database credentials, and `ALLOWED_HOSTS`.
-   - Copy `settings.ini.sample` to `settings.ini` and set the host hashcat binary path plus potfile location.
+   - Set env vars (see `.env.example`): `SECRET_KEY`, `DEBUG`, `DJANGO_ALLOWED_HOSTS`, `MYSQL_*`, `HASHCAT_CACHE_*`, `WEBHASHCAT_HASHCAT_BINARY`, `WEBHASHCAT_POTFILE`, `HASHCAT_BRAIN_HOST`.
    - Run migrations and create a superuser:
      ```
      python manage.py makemigrations

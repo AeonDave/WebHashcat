@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-import configparser
 import hashlib
 import io
 import logging
@@ -31,6 +30,13 @@ from Utils.models import Lock
 from Utils.utils import del_hashfile_locks
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _env(name: str, default: str) -> str:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value
 
 
 class HashcatExecutionError(RuntimeError):
@@ -256,19 +262,11 @@ class Hashcat(object):
 
     @classmethod
     def get_binary(self):
-        config = configparser.ConfigParser()
-        utils_dir = os.path.dirname(os.path.abspath(__file__))
-        config.read(os.path.join(utils_dir, '..', 'settings.ini'))
-
-        return config["Hashcat"]["binary"]
+        return _env("WEBHASHCAT_HASHCAT_BINARY", _env("HASHCAT_BINARY", "/usr/bin/hashcat"))
 
     @classmethod
     def get_potfile(self):
-        config = configparser.ConfigParser()
-        utils_dir = os.path.dirname(os.path.abspath(__file__))
-        config.read(os.path.join(utils_dir, '..', 'settings.ini'))
-
-        return config["Hashcat"]["potfile"]
+        return _env("WEBHASHCAT_POTFILE", "/webhashcat/Files/potfile")
 
     @classmethod
     def get_hash_types(self):

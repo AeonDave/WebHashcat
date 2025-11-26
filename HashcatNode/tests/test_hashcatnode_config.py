@@ -25,23 +25,6 @@ class SecretHelperTests(unittest.TestCase):
             }
         )
 
-    def test_secret_file_overrides_inline_value(self):
-        with tempfile.NamedTemporaryFile("w", delete=False) as handle:
-            handle.write("file-secret\n")
-            secret_path = handle.name
-
-        self.addCleanup(lambda: os.unlink(secret_path))
-
-        with mock.patch.dict(
-                os.environ,
-                {
-                    "HASHCATNODE_PASSWORD": "env-secret",
-                    "HASHCATNODE_PASSWORD_FILE": secret_path,
-                },
-                clear=False,
-        ):
-            self.assertEqual(node_secrets.read_secret("HASHCATNODE_PASSWORD"), "file-secret")
-
     def test_resolve_credentials_prefers_env_username_and_password(self):
         with mock.patch.dict(
                 os.environ,

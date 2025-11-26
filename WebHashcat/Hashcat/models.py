@@ -1,6 +1,10 @@
 from Nodes.models import Node
 from django.contrib.auth.models import User
 from django.db import models
+import logging
+from pathlib import Path
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 
 
 # Create your models here.
@@ -52,3 +56,28 @@ class Search(models.Model):
     output_file = models.TextField()
     processing_time = models.IntegerField(null=True)
     json_search_info = models.TextField()
+
+
+# Cleanup hooks to avoid orphaned files on disk
+LOGGER = logging.getLogger(__name__)
+
+
+def _safe_unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:  # pragma: no cover - best effort cleanup
+        LOGGER.warning("Unable to delete file %s: %s", path, exc)
+
+
+@receiver(pre_delete, sender=Hashfile)
+def _cleanup_hashfile(sender, instance: Hashfile, **kwargs):
+    base_dir = Path(__file__).resolve().parent.parent / "Files" / "Hashfiles"
+    _safe_unlink(base_dir / instance.hashfile)
+
+
+@receiver(pre_delete, sender=Search)
+def _cleanup_search(sender, instance: Search, **kwargs):
+    if instance.output_file:
+        _safe_unlink(Path(instance.output_file))

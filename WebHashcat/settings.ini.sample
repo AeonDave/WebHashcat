@@ -1,3 +1,0 @@
-[Hashcat]
-binary = /usr/bin/hashcat
-potfile = Files/potfile

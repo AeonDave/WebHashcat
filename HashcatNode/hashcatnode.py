@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-import configparser
 import logging
 import os
 import subprocess
@@ -17,8 +16,25 @@ except ImportError:  # pragma: no cover - fallback for direct execution
     import secrets as node_secrets  # type: ignore
 
 BASE_DIR = Path(__file__).resolve().parent
-SETTINGS_PATH = BASE_DIR / "settings.ini"
-DEFAULT_CERT_SUBJECT = os.environ.get(
+
+
+def _env(name: str, default: str | None = None, *, required: bool = False) -> str | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        if required:
+            raise RuntimeError(f"Missing required environment variable {name}")
+        return default
+    return value
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+DEFAULT_CERT_SUBJECT = _env(
     "HASHCATNODE_TLS_SUBJECT",
     "/C=IT/ST=Italy/L=Turin/O=WebHashcat/OU=HashcatNode/CN=hashcatnode",
 )
@@ -56,14 +72,6 @@ class NodeSettings:
             'port': self.brain_port,
             'password': self.brain_password,
         }
-
-
-def _read_config() -> configparser.ConfigParser:
-    config = configparser.ConfigParser()
-    read_files = config.read(SETTINGS_PATH)
-    if not read_files:
-        raise FileNotFoundError(f"Unable to read settings file at {SETTINGS_PATH}")
-    return config
 
 
 def _directory_from_env(env_name: str, fallback: str) -> str:
@@ -124,28 +132,36 @@ def _configure_logging(loglevel_str: str) -> None:
     )
 
 
-def _load_directories(config: configparser.ConfigParser) -> Tuple[str, str, str, str]:
-    hashes_dir = _directory_from_env("HASHCATNODE_HASHES_DIR", config["Hashcat"]["hashes_dir"])
-    rules_dir = _directory_from_env("HASHCATNODE_RULES_DIR", config["Hashcat"]["rule_dir"])
-    mask_dir = _directory_from_env("HASHCATNODE_MASKS_DIR", config["Hashcat"]["mask_dir"])
-    wordlist_dir = _directory_from_env("HASHCATNODE_WORDLISTS_DIR", config["Hashcat"]["wordlist_dir"])
+def _load_directories() -> Tuple[str, str, str, str]:
+    hashes_dir = _directory_from_env("HASHCATNODE_HASHES_DIR", "/hashcatnode/hashes")
+    rules_dir = _directory_from_env("HASHCATNODE_RULES_DIR", "/hashcatnode/rules")
+    mask_dir = _directory_from_env("HASHCATNODE_MASKS_DIR", "/hashcatnode/masks")
+    wordlist_dir = _directory_from_env("HASHCATNODE_WORDLISTS_DIR", "/hashcatnode/wordlists")
     return hashes_dir, rules_dir, mask_dir, wordlist_dir
 
 
-def _build_settings(config: configparser.ConfigParser) -> NodeSettings:
-    bind_address = config["Server"]["bind"]
-    bind_port = int(config["Server"]["port"])
-    username, username_hash = node_secrets.resolve_credentials(config["Server"])
+def _build_settings() -> NodeSettings:
+    bind_address = _env("HASHCATNODE_BIND", "0.0.0.0")
+    bind_port = int(_env("HASHCATNODE_PORT", "9999"))
+    username, username_hash = node_secrets.resolve_credentials()
 
-    binary = os.environ.get("HASHCATNODE_BINARY", config["Hashcat"]["binary"])
-    hashes_dir, rules_dir, mask_dir, wordlist_dir = _load_directories(config)
-    workload_profile = config["Hashcat"]["workload_profile"]
+    binary = _env("HASHCATNODE_BINARY", "/usr/local/bin/hashcat")
+    hashes_dir, rules_dir, mask_dir, wordlist_dir = _load_directories()
+    workload_profile = _env("HASHCATNODE_WORKLOAD_PROFILE", "3")
 
-    cert_dir_default = str(BASE_DIR / "certs")
-    cert_dir = Path(os.environ.get("HASHCATNODE_CERT_DIR", cert_dir_default))
-    cert_path = Path(os.environ.get("HASHCATNODE_CERT_PATH", str(cert_dir / "server.crt")))
-    key_path = Path(os.environ.get("HASHCATNODE_KEY_PATH", str(cert_dir / "server.key")))
+    cert_dir_default = _env("HASHCATNODE_CERT_DIR", str(BASE_DIR / "certs"))
+    cert_dir = Path(cert_dir_default)
+    cert_path = Path(_env("HASHCATNODE_CERT_PATH", str(cert_dir / "server.crt")))
+    key_path = Path(_env("HASHCATNODE_KEY_PATH", str(cert_dir / "server.key")))
     cert_file, key_file = _ensure_tls_material(cert_path, key_path)
+
+    brain_enabled = "true" if _bool_env("HASHCATNODE_BRAIN_ENABLED", False) else "false"
+    brain_host = (_env("HASHCATNODE_BRAIN_HOST", _env("HASHCAT_BRAIN_HOST", "")) or "").strip()
+    brain_port = _env("HASHCATNODE_BRAIN_PORT", _env("HASHCAT_BRAIN_PORT", "13743"))
+    brain_password = _env("HASHCATNODE_BRAIN_PASSWORD", _env("HASHCAT_BRAIN_PASSWORD", ""))
+
+    if brain_enabled == "true" and not brain_password:
+        raise RuntimeError("Brain is enabled but HASHCATNODE_BRAIN_PASSWORD/HASHCAT_BRAIN_PASSWORD is not set")
 
     return NodeSettings(
         bind_address=bind_address,
@@ -160,12 +176,12 @@ def _build_settings(config: configparser.ConfigParser) -> NodeSettings:
         workload_profile=workload_profile,
         cert_file=cert_file,
         key_file=key_file,
-        brain_enabled=config['Brain']['enabled'],
+        brain_enabled=brain_enabled,
         # ``host`` is optional; when omitted the node can auto-detect it
         # from incoming WebHashcat requests.
-        brain_host=config['Brain'].get('host', ''),
-        brain_port=config['Brain']['port'],
-        brain_password=config['Brain']['password'],
+        brain_host=brain_host,
+        brain_port=brain_port,
+        brain_password=brain_password,
     )
 
 
@@ -185,12 +201,10 @@ def _detect_device_type() -> int:
 
 
 def main(run_server: bool = True):
-    config = _read_config()
-
-    loglevel_str = config["General"]["loglevel"]
+    loglevel_str = _env("HASHCATNODE_LOGLEVEL", "info")
     _configure_logging(loglevel_str)
 
-    settings = _build_settings(config)
+    settings = _build_settings()
 
     logging.info("Hashcat node starting on %s:%s (db=%s)", settings.bind_address, settings.bind_port,
                  os.environ.get("HASHCATNODE_DB_PATH", "hashcatnode.db"))

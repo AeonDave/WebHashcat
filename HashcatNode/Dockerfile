@@ -33,7 +33,7 @@ RUN test -f ${HASHCAT_BINARY} && echo "Hashcat binary found at ${HASHCAT_BINARY}
     (echo "Hashcat binary NOT found at ${HASHCAT_BINARY}" && \
      find /usr -name "hashcat" -type f 2>/dev/null || echo "No hashcat found anywhere")
 
-# Runtime bootstrap copies settings/sample and launches node
+# Runtime bootstrap ensures DB and launches node
 COPY entrypoint.sh /usr/local/bin/hashcatnode-entrypoint.sh
 RUN chmod +x /usr/local/bin/hashcatnode-entrypoint.sh
 

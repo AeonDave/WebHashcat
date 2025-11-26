@@ -51,6 +51,13 @@ ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 SERVER_START = time.time()
 
 
+def _env(name: str, default: str) -> str:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value
+
+
 class HashcatExecutionError(RuntimeError):
     """Raised when a hashcat subprocess fails."""
 
@@ -380,14 +387,17 @@ class Hashcat(object):
         else:
             raise Exception("Unsupported cracking type: %s" % crack_type)
 
-        pot_file = os.path.join(os.path.dirname(__file__), "potfiles", ''.join(
+        pot_dir = _env("HASHCATNODE_POTFILES_DIR", os.path.join(os.path.dirname(__file__), "potfiles"))
+        os.makedirs(pot_dir, exist_ok=True)
+        pot_file = os.path.join(pot_dir, ''.join(
             random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".potfile")
 
+        output_file = None
         if hashcat_debug_file:
-            output_file = os.path.join(os.path.dirname(__file__), "outputs", ''.join(
+            outputs_dir = _env("HASHCATNODE_OUTPUTS_DIR", os.path.join(os.path.dirname(__file__), "outputs"))
+            os.makedirs(outputs_dir, exist_ok=True)
+            output_file = os.path.join(outputs_dir, ''.join(
                 random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".output")
-        else:
-            output_file = None
 
         session = Session(
             name=name,

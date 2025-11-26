@@ -10,13 +10,11 @@ services:
             HASHCAT_BINARY: /usr/local/bin/hashcat
       ports:
          - "9999:9999"
+      env_file:
+         - ./.env
       environment:
          - NVIDIA_VISIBLE_DEVICES=all
          - HASHCATNODE_DEVICE_TYPE=2
-         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
-         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
-         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
-         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
       restart: unless-stopped
       volumes:
          - ./hashes:/hashcatnode/hashes
@@ -27,7 +25,6 @@ services:
          - ./potfiles:/hashcatnode/potfiles
          - ./certs:/hashcatnode/certs
          - hashcatnode-db:/hashcatnode/data
-         - ./secrets:/run/secrets:ro
       deploy:
          resources:
             reservations:
@@ -50,12 +47,10 @@ services:
             HASHCAT_BINARY: /usr/local/bin/hashcat
       ports:
          - "9999:9999"
+      env_file:
+         - ./.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=1
-         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
-         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
-         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
-         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
       restart: unless-stopped
       volumes:
          - ./hashes:/hashcatnode/hashes
@@ -66,7 +61,6 @@ services:
          - ./potfiles:/hashcatnode/potfiles
          - ./certs:/hashcatnode/certs
          - hashcatnode-db:/hashcatnode/data
-         - ./secrets:/run/secrets:ro
       networks:
          webhashcat:
             aliases:
@@ -83,12 +77,10 @@ services:
             HASHCAT_BINARY: /usr/local/bin/hashcat
       ports:
          - "9999:9999"
+      env_file:
+         - ./.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=2
-         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
-         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
-         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
-         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
       restart: unless-stopped
       volumes:
          - ./hashes:/hashcatnode/hashes
@@ -99,7 +91,6 @@ services:
          - ./potfiles:/hashcatnode/potfiles
          - ./certs:/hashcatnode/certs
          - hashcatnode-db:/hashcatnode/data
-         - ./secrets:/run/secrets:ro
       networks:
          webhashcat:
             aliases:
@@ -116,12 +107,10 @@ services:
             HASHCAT_BINARY: /usr/local/bin/hashcat
       ports:
          - "9999:9999"
+      env_file:
+         - ./.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=2
-         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
-         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
-         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
-         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
       restart: unless-stopped
       devices:
          - /dev/dri:/dev/dri
@@ -134,7 +123,6 @@ services:
          - ./potfiles:/hashcatnode/potfiles
          - ./certs:/hashcatnode/certs
          - hashcatnode-db:/hashcatnode/data
-         - ./secrets:/run/secrets:ro
       networks:
          webhashcat:
             aliases:
@@ -151,12 +139,10 @@ services:
             HASHCAT_BINARY: /usr/local/bin/hashcat
       ports:
          - "9999:9999"
+      env_file:
+         - ./.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=1
-         - HASHCATNODE_USERNAME_FILE=${HASHCATNODE_USERNAME_FILE:-/run/secrets/hashcatnode_username}
-         - HASHCATNODE_PASSWORD_FILE=${HASHCATNODE_PASSWORD_FILE:-/run/secrets/hashcatnode_password}
-         - HASHCATNODE_CERT_DIR=/hashcatnode/certs
-         - HASHCATNODE_DB_PATH=/hashcatnode/data/hashcatnode.db
       restart: unless-stopped
       volumes:
          - ./hashes:/hashcatnode/hashes
@@ -167,7 +153,6 @@ services:
          - ./potfiles:/hashcatnode/potfiles
          - ./certs:/hashcatnode/certs
          - hashcatnode-db:/hashcatnode/data
-         - ./secrets:/run/secrets:ro
       networks:
          webhashcat:
             aliases:

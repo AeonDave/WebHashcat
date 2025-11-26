@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from Hashcat.models import Hashfile, Session
+from Hashcat.models import Hashfile, Session, Search
 from Nodes.models import Node
 from Utils.models import Task
 from Utils.tasks import import_hashfile_task
@@ -238,3 +238,44 @@ class SessionControlViewTests(TestCase):
 
         self.assertEqual(Session.objects.count(), 1)
         mock_api.create_mask_session.assert_called_once()
+
+
+class FileCleanupTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="owner", password="pw")
+        HASHFILES_DIR.mkdir(parents=True, exist_ok=True)
+        self.search_dir = HASHFILES_DIR.parent / "Searches"
+        self.search_dir.mkdir(parents=True, exist_ok=True)
+
+    def test_hashfile_delete_removes_disk_file(self):
+        filename = "cleanup.hash"
+        path = HASHFILES_DIR / filename
+        path.write_text("hash", encoding="utf-8")
+        hashfile = Hashfile.objects.create(
+            owner=self.user,
+            name="cleanup",
+            hashfile=filename,
+            hash_type=0,
+            line_count=1,
+            cracked_count=0,
+            username_included=False,
+        )
+
+        hashfile.delete()
+        self.assertFalse(path.exists())
+
+    def test_search_delete_removes_output_file(self):
+        out_path = self.search_dir / "search.csv"
+        out_path.write_text("data", encoding="utf-8")
+        search = Search.objects.create(
+            owner=self.user,
+            name="s",
+            status="Done",
+            output_lines=1,
+            output_file=str(out_path),
+            processing_time=1,
+            json_search_info="{}",
+        )
+
+        search.delete()
+        self.assertFalse(out_path.exists())

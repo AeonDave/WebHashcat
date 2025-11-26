@@ -54,10 +54,10 @@ class Server:
     def _update_brain_host_from_request(self) -> None:
         """Auto-detect Brain host from the caller when Brain is enabled.
 
-        If [Brain].enabled is true and no host has been configured yet,
+        If Brain is enabled and no host has been configured yet,
         we treat the remote address of the incoming WebHashcat request as
         the Brain server host. This keeps node configuration minimal: only
-        ``enabled``, ``port`` and ``password`` are required in settings.ini.
+        ``enabled``, ``port`` and ``password`` are required via env.
         """
 
         try:
@@ -74,7 +74,7 @@ class Server:
 
         current_host = str(brain_cfg.get("host", "") or "").strip()
         if current_host:
-            # Respect an explicit host (from settings.ini or previous detection).
+            # Respect an explicit host (from env or previous detection).
             return
 
         hinted_host = str(request.headers.get("X-Hashcat-Brain-Host", "") or "").strip()
