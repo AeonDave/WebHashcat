@@ -1,4 +1,4 @@
-ARG HASHCAT_BASE=dizcza/docker-hashcat:intel-cpu
+ARG HASHCAT_BASE=dizcza/docker-hashcat:cuda
 FROM ${HASHCAT_BASE}
 ARG HASHCAT_VERSION=v7.1.2
 ARG HASHCAT_BINARY=/usr/local/bin/hashcat
