@@ -1,9 +1,7 @@
 # --- Project configuration ---
-UIHashcat/settings.ini
 UIHashcat/db.sqlite3
 UIHashcat/celerybeat.pid
 UIHashcat/celerybeat-schedule
-NodeHashcat/settings.ini
 NodeHashcat/hashcatnode.db
 NodeHashcat/hashcatnode.log
 
@@ -103,4 +101,3 @@ celerybeat-schedule
 .DS_Store
 node_modules/
 .github/
-todo.md
