@@ -11,30 +11,30 @@ NodeHashcat/hashcatnode.log
 UIHashcat/Files/potfile*
 UIHashcat/Files/tmp/*
 UIHashcat/Files/Hashfiles/**
-WebHashcat/Files/Crackedfiles/*.crackedfile
-WebHashcat/Files/Maskfiles/*.hcmask
-WebHashcat/Files/Rulefiles/*.rule
-WebHashcat/Files/Wordlistfiles/*.wordlist
-WebHashcat/Files/**/*.zip
-WebHashcat/Files/**/*.gz
-WebHashcat/Files/**/*.7z
-WebHashcat/Files/**/*.json
+UIHashcat/Files/Crackedfiles/*.crackedfile
+UIHashcat/Files/Maskfiles/*.hcmask
+UIHashcat/Files/Rulefiles/*.rule
+UIHashcat/Files/Wordlistfiles/*.wordlist
+UIHashcat/Files/**/*.zip
+UIHashcat/Files/**/*.gz
+UIHashcat/Files/**/*.7z
+UIHashcat/Files/**/*.json
 UIHashcat/Files/Searches/**
 !UIHashcat/**/.gitkeep
 
 # --- Hashcat node assets ---
-HashcatNode/**/*.crt
-HashcatNode/**/*.key
-HashcatNode/**/*.list
-HashcatNode/**/*.rule
-HashcatNode/**/*.hcmask
-HashcatNode/**/*.potfile
-HashcatNode/**/*.wordlist
-HashcatNode/**/*.output
-HashcatNode/**/*.zip
-HashcatNode/**/*.gz
-HashcatNode/**/*.7z
-HashcatNode/**/*.json
+NodeHashcat/**/*.crt
+NodeHashcat/**/*.key
+NodeHashcat/**/*.list
+NodeHashcat/**/*.rule
+NodeHashcat/**/*.hcmask
+NodeHashcat/**/*.potfile
+NodeHashcat/**/*.wordlist
+NodeHashcat/**/*.output
+NodeHashcat/**/*.zip
+NodeHashcat/**/*.gz
+NodeHashcat/**/*.7z
+NodeHashcat/**/*.json
 
 # --- Python cache / build output ---
 __pycache__/
