@@ -219,11 +219,11 @@ Notes:
 
 Screenshots:
 
-<p style="text-align:center;"><img src="./screenshots/webhashcat_hashfile_list.png" alt="Hashfile list"></p>
+<!-- <p style="text-align:center;"><img src="./screenshots/webhashcat_hashfile_list.png" alt="Hashfile list"></p>
 
 <p style="text-align:center;"><img src="./screenshots/webhashcat_node.png" alt="Node details"></p>
 
-<p style="text-align:center;"><img src="./screenshots/webhashcat_searches.png" alt="Search view"></p>
+<p style="text-align:center;"><img src="./screenshots/webhashcat_searches.png" alt="Search view"></p> -->
 
 ## Managing nodes and assets
 

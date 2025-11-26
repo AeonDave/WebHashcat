@@ -489,6 +489,17 @@ class Hashcat(object):
 
         logging.info("Rule file %s uploaded" % name)
 
+    @classmethod
+    def remove_rule(self, name):
+        name = name.split("/")[-1]
+        path = os.path.join(self.rules_dir, name)
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        # refresh inventory
+        self.parse_rules()
+
     """
         Upload a new mask file
     """
@@ -516,6 +527,18 @@ class Hashcat(object):
         self.parse_masks()
 
         logging.info("Mask file %s uploaded" % name)
+
+    @classmethod
+    def remove_mask(self, name):
+        name = name.split("/")[-1]
+        path = os.path.join(self.mask_dir, name)
+
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        # refresh inventory
+        self.parse_masks()
 
     """
         Upload a new wordlist file

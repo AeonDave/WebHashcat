@@ -524,6 +524,20 @@ class Server:
             manifest = request.get_json(force=True, silent=True) or {}
             missing = {"rules": [], "masks": [], "wordlists": [], "hashfiles": []}
 
+            def _prune_dir(dir_path: str, keep: set) -> None:
+                """Remove files in dir_path that are not in keep."""
+                try:
+                    for entry in os.listdir(dir_path):
+                        if entry == ".gitkeep":
+                            continue
+                        if entry not in keep:
+                            try:
+                                os.remove(Path(dir_path) / entry)
+                            except Exception as exc:
+                                LOGGER.warning("Failed to remove extra asset %s/%s: %s", dir_path, entry, exc)
+                except FileNotFoundError:
+                    pass
+
             # Rules
             remote_rules = Hashcat.rules
             local_rules = manifest.get("rules", {})
@@ -532,6 +546,7 @@ class Server:
                     missing["rules"].append(name)
             for extra in set(remote_rules.keys()) - set(local_rules.keys()):
                 Hashcat.remove_rule(extra)
+            _prune_dir(Hashcat.rules_dir, set(local_rules.keys()))
 
             # Masks
             remote_masks = Hashcat.masks
@@ -544,6 +559,7 @@ class Server:
                 if extra == ".gitkeep":
                     continue
                 Hashcat.remove_mask(extra)
+            _prune_dir(Hashcat.mask_dir, set(local_masks.keys()))
 
             # Wordlists
             remote_wordlists = Hashcat.wordlists
@@ -555,6 +571,7 @@ class Server:
                 if extra == ".gitkeep":
                     continue
                 Hashcat.remove_wordlist(extra)
+            _prune_dir(Hashcat.wordlist_dir, set(local_wordlists.keys()))
 
             # Hashfiles: do not prune here because session-specific copies have
             # randomised names (hashcat creates a new .list per session). Just
