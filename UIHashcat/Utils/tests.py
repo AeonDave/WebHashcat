@@ -16,7 +16,7 @@ if str(ROOT / "HashcatNode") not in sys.path:
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
-from HashcatNode.hashcat import Session
+from NodeHashcat.hashcat import Session
 from Utils.hashcat import HashcatExecutionError, PotfileManager
 from Utils.models import Lock
 from Utils.tasks import *

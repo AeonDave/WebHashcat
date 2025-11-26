@@ -16,7 +16,7 @@ try:  # Support package-relative imports when HashcatNode is a module
     from .hashcat import Hashcat  # type: ignore
 except ImportError:  # pragma: no cover - fallback for direct execution
     try:
-        from HashcatNode.hashcat import Hashcat  # type: ignore
+        from NodeHashcat.hashcat import Hashcat  # type: ignore
     except ImportError:
         from hashcat import Hashcat
 

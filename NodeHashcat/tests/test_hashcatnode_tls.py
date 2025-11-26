@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from HashcatNode import hashcatnode
+from NodeHashcat import hashcatnode
 
 
 class EnsureTlsMaterialTests(unittest.TestCase):

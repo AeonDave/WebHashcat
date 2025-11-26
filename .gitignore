@@ -1,16 +1,16 @@
 # --- Project configuration ---
-WebHashcat/settings.ini
-WebHashcat/db.sqlite3
-WebHashcat/celerybeat.pid
-WebHashcat/celerybeat-schedule
-HashcatNode/settings.ini
-HashcatNode/hashcatnode.db
-HashcatNode/hashcatnode.log
+UIHashcat/settings.ini
+UIHashcat/db.sqlite3
+UIHashcat/celerybeat.pid
+UIHashcat/celerybeat-schedule
+NodeHashcat/settings.ini
+NodeHashcat/hashcatnode.db
+NodeHashcat/hashcatnode.log
 
 # --- Uploaded / generated files ---
-WebHashcat/Files/potfile*
-WebHashcat/Files/tmp/*
-WebHashcat/Files/Hashfiles/**
+UIHashcat/Files/potfile*
+UIHashcat/Files/tmp/*
+UIHashcat/Files/Hashfiles/**
 WebHashcat/Files/Crackedfiles/*.crackedfile
 WebHashcat/Files/Maskfiles/*.hcmask
 WebHashcat/Files/Rulefiles/*.rule
@@ -19,8 +19,8 @@ WebHashcat/Files/**/*.zip
 WebHashcat/Files/**/*.gz
 WebHashcat/Files/**/*.7z
 WebHashcat/Files/**/*.json
-WebHashcat/Files/Searches/**
-!WebHashcat/**/.gitkeep
+UIHashcat/Files/Searches/**
+!UIHashcat/**/.gitkeep
 
 # --- Hashcat node assets ---
 HashcatNode/**/*.crt

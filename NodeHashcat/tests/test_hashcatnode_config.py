@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from HashcatNode import secrets as node_secrets
-from HashcatNode.hashcat import Hashcat, HashcatExecutionError, Session
+from NodeHashcat import secrets as node_secrets
+from NodeHashcat.hashcat import Hashcat, HashcatExecutionError, Session
 
 
 class SecretHelperTests(unittest.TestCase):

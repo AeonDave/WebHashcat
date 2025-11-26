@@ -6,7 +6,7 @@ from pathlib import Path
 from Nodes.models import Node
 from django.core.management.base import BaseCommand, CommandError
 
-from HashcatNode.secrets import hash_password
+from NodeHashcat.secrets import hash_password
 
 # Ensure project root (containing HashcatNode) is on sys.path when running manage.py from WebHashcat
 ROOT = Path(__file__).resolve().parents[4]
