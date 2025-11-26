@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% load static %}
+{% block breadcrumb %}Dashboard{% endblock %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div id="messages" class="mb-4"></div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">General statistics</div>
+    <table id="stat_table" class="display nowrap w-full text-sm"></table>
+  </div>
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Cracked ratio</div>
+    <div id="cracked_graph" class="h-48"></div>
+  </div>
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Nodes</div>
+    <table id="node_table" class="display nowrap w-full text-sm"></table>
+    <p id="dashboard_node_cache_hint" class="text-xs text-gray-400 mt-2"></p>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Running sessions</div>
+    <table id="running_session_table" class="display nowrap w-full text-sm"></table>
+    <p id="running_cache_hint" class="text-xs text-gray-400 mt-2"></p>
+  </div>
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Failed sessions</div>
+    <table id="error_session_table" class="display nowrap w-full text-sm"></table>
+    <p id="error_cache_hint" class="text-xs text-gray-400 mt-2"></p>
+  </div>
+</div>
+
+<script src="https://code.highcharts.com/highcharts.js"></script>
+<script src="{% static 'js/cache.js' %}"></script>
+<script>
+  window.dashboardConfig = {
+    crackedRatioUrl: "{% url 'API:api_cracked_ratio' %}",
+    statsUrl: "{% url 'API:api_statistics' %}",
+    nodeStatusUrl: "{% url 'API:api_node_status' %}",
+    runningSessionsUrl: "{% url 'API:api_running_sessions' %}",
+    errorSessionsUrl: "{% url 'API:api_error_sessions' %}",
+    prefetch: {{ prefetch_json|default:"{}"|safe }},
+  };
+</script>
+<script src="{% static 'js/dashboard.js' %}"></script>
+{% endblock %}

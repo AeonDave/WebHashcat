@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block breadcrumb %}Hashes & Sessions{% endblock %}
+{% block title %}Hashes{% endblock %}
+
+{% block content %}
+<div id="messages" class="mb-4 min-h-[20px]"></div>
+
+<!-- Nodes snapshot -->
+<div class="card rounded-xl p-4 mb-6">
+  <div class="flex items-center justify-between mb-2">
+    <div class="text-lg font-semibold text-gray-100">Nodes</div>
+    <span id="node_cache_hint" class="text-xs text-gray-400"></span>
+  </div>
+  <table id="node_table" class="display nowrap w-full text-sm"></table>
+</div>
+
+<!-- Hashfiles -->
+<div class="card rounded-xl p-4">
+  <div class="flex items-center justify-between mb-3">
+    <div>
+      <div class="text-lg font-semibold text-gray-100">Hashfiles</div>
+      <p id="hashfile_cache_hint" class="text-xs text-gray-400"></p>
+    </div>
+    <div class="flex gap-2">
+      <button id="update_hashfiles" class="px-3 py-1.5 text-sm rounded-md bg-primary/20 text-primary border border-primary/40 hover:bg-primary/30">Update</button>
+      <button data-modal-target="action_add" data-modal-toggle="action_add" class="px-3 py-1.5 text-sm rounded-md bg-accent/20 text-accent border border-accent/40 hover:bg-accent/30">Add</button>
+    </div>
+  </div>
+  <table id="hashfile_table" class="display nowrap w-full text-sm"></table>
+</div>
+
+<!-- Modal: Add hashfile -->
+<div id="action_add" tabindex="-1" aria-hidden="true" class="fixed top-0 left-0 right-0 z-50 hidden w-full p-4 overflow-x-hidden overflow-y-auto md:inset-0 h-full">
+  <div class="relative w-full max-w-4xl">
+    <div class="relative rounded-lg shadow card p-6">
+      <div class="flex items-center justify-between border-b border-gray-800 pb-3 mb-4">
+        <h3 class="text-xl font-semibold text-gray-100">New hashfile</h3>
+        <button type="button" class="text-gray-400 hover:text-white" data-modal-hide="action_add">&times;</button>
+      </div>
+      <form action="{% url 'Hashcat:hashfiles' %}" method="post" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add">
+        <div>
+          <label class="block text-sm mb-1" for="hash_type">Hash type</label>
+          <select class="w-full rounded border border-gray-700 bg-[#0b1220] p-2" id="hash_type" name="hash_type">
+            {% for hash_type in hash_type_list %}
+            <option value="{{ hash_type.id }}">{{ hash_type.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm mb-1" for="name">Name</label>
+          <input type="text" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2" id="name" name="name" placeholder="Name for this hashfile">
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-sm mb-1" for="hashes">Hashes</label>
+          <textarea class="w-full rounded border border-gray-700 bg-[#0b1220] p-2" rows="4" id="hashes" name="hashes" placeholder="Paste hashes or leave empty and upload a file"></textarea>
+        </div>
+        <div>
+          <label class="block text-sm mb-1" for="hashfile">Hash file input</label>
+          <input type="file" id="hashfile" name="hashfile" class="text-sm text-gray-200">
+          <p class="text-xs text-gray-500 mt-1">Leave “Hashes” empty if you select a file.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" name="username_included" id="username_included" class="accent-primary">
+          <label for="username_included" class="text-sm">Username included (user:hash)</label>
+        </div>
+        <div class="md:col-span-2 flex justify-end gap-2 mt-2">
+          <button type="button" data-modal-hide="action_add" class="px-3 py-1.5 rounded border border-gray-700 text-gray-300">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: New session -->
+<div id="action_new" tabindex="-1" aria-hidden="true" class="fixed top-0 left-0 right-0 z-50 hidden w-full p-4 overflow-x-hidden overflow-y-auto md:inset-0 h-full">
+  <div class="relative w-full max-w-5xl">
+    <div class="relative rounded-lg shadow card p-6">
+      <div class="flex items-center justify-between border-b border-gray-800 pb-3 mb-4">
+        <h3 class="text-xl font-semibold text-gray-100" id="session_modal_title">New session</h3>
+        <button type="button" class="text-gray-400 hover:text-white" data-modal-hide="action_new">&times;</button>
+      </div>
+      <div class="mb-4">
+        <ul class="flex text-sm border-b border-gray-800" id="session_tabs" data-tabs-toggle="#session_tab_content">
+          <li class="me-2">
+            <button class="inline-block p-3 rounded-t-lg border-b-2" id="tab-dict" data-tabs-target="#dict_tab" type="button">Dictionary</button>
+          </li>
+          <li class="me-2">
+            <button class="inline-block p-3 rounded-t-lg border-b-2" id="tab-mask" data-tabs-target="#mask_tab" type="button">Mask</button>
+          </li>
+        </ul>
+      </div>
+      <div id="session_tab_content">
+        <div class="hidden" id="dict_tab">
+          <form action="{% url "Hashcat:new_session" %}" enctype="multipart/form-data" method="post" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {% csrf_token %}
+            <input type="hidden" name="crack_type" value="dictionary">
+            <input type="hidden" id="hashfile_id_dict" name="hashfile_id">
+            <div class="md:col-span-2">
+              <div class="text-sm mb-1">Device / cluster mode</div>
+              <div id="device_type_label_dict" class="text-primary text-sm">Detecting from node.</div>
+              <input type="hidden" name="device_type" id="device_type_input_dict" value="1">
+            </div>
+            <label class="block text-sm">Node / Brain cluster
+              <select name="node" id="node_dict" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for node in node_list %}
+                <option value="{{ node.name }}">{{ node.name }}</option>
+                {% endfor %}
+                <option value="__brain_cluster__">Brain cluster (all Brain-enabled nodes)</option>
+              </select>
+              <p class="text-xs text-gray-400 mt-1">
+                Se scegli "Brain cluster" verranno create più sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
+              </p>
+            </label>
+            <label class="block text-sm">Hash type
+              <select id="hash_type_dict" name="hash_type" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for hash_type in hash_type_list %}
+                <option value="{{ hash_type.id }}">{{ hash_type.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block text-sm">Rule(s)
+              <select name="rule" multiple class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for rule in rule_list %}
+                <option value="{{ rule.name }}">{{ rule.name }}</option>
+                {% endfor %}
+              </select>
+              <p class="text-xs text-gray-400 mt-1">Select one or more rules; they will be applied in order.</p>
+            </label>
+            <label class="block text-sm">Wordlist
+              <select name="wordlist" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for wordlist in wordlist_list %}
+                <option value="{{ wordlist.name }}">{{ wordlist.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block text-sm">End date (optional)
+              <input type="text" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1" name="end_datetime" id="end_dict">
+            </label>
+            <label class="inline-flex items-center cursor-pointer mt-2">
+              <input type="checkbox" name="debug" value="debug" class="sr-only peer">
+              <div class="relative w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/60 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+              <span class="ms-3 text-sm text-gray-200">Save hashcat output file for debug</span>
+            </label>
+            <label class="inline-flex items-center cursor-pointer mt-2">
+              <input type="checkbox" name="kernel_optimized" value="1" class="sr-only peer">
+              <div class="relative w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/60 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+              <span class="ms-3 text-sm text-gray-200">Add kernel optimization (-O, limits password length)</span>
+            </label>
+            <div class="md:col-span-2 flex justify-end gap-2 mt-2">
+              <button type="button" data-modal-hide="action_new" class="px-3 py-1.5 rounded border border-gray-700 text-gray-300">Cancel</button>
+              <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Create session</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="hidden" id="mask_tab">
+          <form action="{% url "Hashcat:new_session" %}" enctype="multipart/form-data" method="post" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {% csrf_token %}
+            <input type="hidden" name="crack_type" value="mask">
+            <input type="hidden" id="hashfile_id_mask" name="hashfile_id">
+            <div class="md:col-span-2">
+              <div class="text-sm mb-1">Device type</div>
+              <div id="device_type_label_mask" class="text-primary text-sm">Detecting from node.</div>
+              <input type="hidden" name="device_type" id="device_type_input_mask" value="1">
+            </div>
+            <label class="block text-sm">Node / Brain cluster
+              <select name="node" id="node_mask" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for node in node_list %}
+                <option value="{{ node.name }}">{{ node.name }}</option>
+                {% endfor %}
+                <option value="__brain_cluster__">Brain cluster (all Brain-enabled nodes)</option>
+              </select>
+              <p class="text-xs text-gray-400 mt-1">
+                Se scegli "Brain cluster" verranno create più sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
+              </p>
+            </label>
+            <label class="block text-sm">Mask
+              <select name="mask" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
+                {% for mask in mask_list %}
+                <option value="{{ mask.name }}">{{ mask.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block text-sm">End date (optional)
+              <input type="text" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1" name="end_datetime" id="end_mask">
+            </label>
+            <label class="inline-flex items-center cursor-pointer mt-2">
+              <input type="checkbox" name="debug" value="debug" class="sr-only peer">
+              <div class="relative w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/60 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+              <span class="ms-3 text-sm text-gray-200">Save hashcat output file for debug</span>
+            </label>
+            <label class="inline-flex items-center cursor-pointer mt-2">
+              <input type="checkbox" name="kernel_optimized" value="1" class="sr-only peer">
+              <div class="relative w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/60 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+              <span class="ms-3 text-sm text-gray-200">Add kernel optimization (-O, limits password length)</span>
+            </label>
+            <div class="md:col-span-2 flex justify-end gap-2 mt-2">
+              <button type="button" data-modal-hide="action_new" class="px-3 py-1.5 rounded border border-gray-700 text-gray-300">Cancel</button>
+              <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Create session</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{% static 'js/cache.js' %}"></script>
+    <script>
+        window.hashesConfig = {
+      nodeStatusUrl: "{% url 'API:api_node_status' %}",
+      hashfilesUrl: "{% url 'API:api_hashfiles' %}",
+      hashfileSessionsUrl: "{% url 'API:api_hashfile_sessions' %}",
+      sessionActionUrl: "{% url 'API:api_session_action' %}",
+      clusterActionUrl: "{% url 'API:api_cluster_action' %}",
+      hashfileActionUrl: "{% url 'API:api_hashfile_action' %}",
+      messagesUrl: "{% url 'API:api_get_messages' %}",
+      nodeDeviceMap: {{ node_device_map_json|default:"{}"|safe }},
+    };
+</script>
+<script src="{% static 'js/hashes.js' %}"></script>
+{% endblock %}

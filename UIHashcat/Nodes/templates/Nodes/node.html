@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block breadcrumb %}Node: {{ node_name }}{% endblock %}
+{% block title %}Node {{ node_name }}{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div class="card rounded-xl p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <div class="text-lg font-semibold text-gray-100">{{ node_name }}</div>
+        <p class="text-xs text-gray-400">Hostname {{ hostname }} : {{ port }}</p>
+        <div class="text-xs text-gray-400 space-y-1 mt-2">
+          {% with sys=system %}
+          <div>OS: {{ sys.os|default:"Unknown" }} ({{ sys.environment|default:"" }})</div>
+          <div>CPU: {{ sys.cpu_model|default:"Unknown" }} ({{ sys.cpu_count|default:"?" }} cores)</div>
+          <div>RAM: {% if sys.memory_bytes %}{{ sys.memory_bytes|filesizeformat }}{% else %}Unknown{% endif %}</div>
+          <div>Devices:
+            {% if sys.devices %}
+              <ul class="list-disc list-inside text-gray-300">
+              {% for dev in sys.devices %}
+                <li>{{ dev }}</li>
+              {% endfor %}
+              </ul>
+            {% else %}
+              Unknown
+            {% endif %}
+          </div>
+          <div>Uptime: {% if sys.uptime_seconds %}{{ sys.uptime_seconds|floatformat:0 }}s{% else %}Unknown{% endif %}</div>
+          {% endwith %}
+        </div>
+      </div>
+      <form method="post" data-sync-form>
+        {% csrf_token %}
+        <input type="hidden" name="action" value="synchronize">
+        <button type="submit" class="px-3 py-1.5 text-sm rounded-md bg-primary/20 text-primary border border-primary/40 hover:bg-primary/30">Synchronize</button>
+      </form>
+    </div>
+    <div class="space-y-1 text-sm text-gray-300">
+      <div>Hashcat version: {{ version }}</div>
+      <div>Brain: 
+        {% if brain_enabled %}
+          <span class="px-2 py-1 rounded bg-primary/20 text-primary border border-primary/40 text-xs align-middle">Enabled</span>
+          {% if brain_host_set %}
+            <span class="text-xs text-gray-400 ml-2">(host configured)</span>
+          {% else %}
+            <span class="text-xs text-amber-400 ml-2">(host not found yet)</span>
+          {% endif %}
+        {% else %}
+          <span class="px-2 py-1 rounded bg-gray-800 text-gray-300 border border-gray-700 text-xs align-middle">Disabled</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Hash types</div>
+    <div class="max-h-80 overflow-auto">
+      <table class="w-full text-sm">
+        <thead class="text-gray-400">
+        <tr>
+          <th class="text-left py-2 w-16">ID</th>
+          <th class="text-left py-2">Name</th>
+          <th class="text-left py-2">Description</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for hash_type in hash_type_list %}
+        <tr class="border-t border-gray-800">
+          <td class="py-2">{{ hash_type.id }}</td>
+          <td class="py-2">{{ hash_type.name }}</td>
+          <td class="py-2">{{ hash_type.description }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Rules</div>
+    <div class="max-h-72 overflow-auto">
+      <table class="w-full text-sm">
+        <thead class="text-gray-400">
+        <tr>
+          <th class="text-left py-2">Name</th>
+          <th class="text-left py-2">MD5</th>
+          <th class="text-right py-2">Sync</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for rule in rule_list %}
+        <tr class="border-t border-gray-800">
+          <td class="py-2">{{ rule.name }}</td>
+          <td class="py-2">{{ rule.md5 }}</td>
+          <td class="py-2 text-right">
+            {% if rule.synchro %}
+              <span class="text-emerald-400 text-xs">OK</span>
+            {% else %}
+              <span class="text-red-400 text-xs">Missing</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Masks</div>
+    <div class="max-h-72 overflow-auto">
+      <table class="w-full text-sm">
+        <thead class="text-gray-400">
+        <tr>
+          <th class="text-left py-2">Name</th>
+          <th class="text-left py-2">MD5</th>
+          <th class="text-right py-2">Sync</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for mask in mask_list %}
+        <tr class="border-t border-gray-800">
+          <td class="py-2">{{ mask.name }}</td>
+          <td class="py-2">{{ mask.md5 }}</td>
+          <td class="py-2 text-right">
+            {% if mask.synchro %}
+              <span class="text-emerald-400 text-xs">OK</span>
+            {% else %}
+              <span class="text-red-400 text-xs">Missing</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Wordlists</div>
+    <div class="max-h-72 overflow-auto">
+      <table class="w-full text-sm">
+        <thead class="text-gray-400">
+        <tr>
+          <th class="text-left py-2">Name</th>
+          <th class="text-left py-2">MD5</th>
+          <th class="text-right py-2">Sync</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for wordlist in wordlist_list %}
+        <tr class="border-t border-gray-800">
+          <td class="py-2">{{ wordlist.name }}</td>
+          <td class="py-2">{{ wordlist.md5 }}</td>
+          <td class="py-2 text-right">
+            {% if wordlist.synchro %}
+              <span class="text-emerald-400 text-xs">OK</span>
+            {% else %}
+              <span class="text-red-400 text-xs">Missing</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

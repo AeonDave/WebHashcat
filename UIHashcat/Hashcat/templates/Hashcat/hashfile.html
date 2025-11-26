@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% load static %}
+{% block breadcrumb %}Hashfile: {{ hashfile.name }}{% endblock %}
+{% block title %}Hashfile{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  <div class="card rounded-xl p-4">
+    <div class="flex items-center justify-between mb-2">
+      <div>
+        <div class="text-lg font-semibold text-gray-100">{{ hashfile.name }}</div>
+        <p class="text-xs text-gray-400">Type: {{ hash_type }}</p>
+      </div>
+      <div class="flex gap-2">
+        <a href="{% url "Hashcat:export_cracked" hashfile.id %}"><button class="px-2 py-1 text-xs rounded bg-emerald-900/40 border border-emerald-700 text-emerald-200">Cracked</button></a>
+        <a href="{% url "Hashcat:export_uncracked" hashfile.id %}"><button class="px-2 py-1 text-xs rounded bg-red-900/40 border border-red-700 text-red-200">Uncracked</button></a>
+        <a href="{% url "Hashcat:csv_masks" hashfile.id %}"><button class="px-2 py-1 text-xs rounded bg-amber-900/40 border border-amber-700 text-amber-200">Masks</button></a>
+      </div>
+    </div>
+    <div class="text-sm text-gray-300 space-y-1">
+      <div>Lines: {{ lines }}</div>
+      <div>Recovered: {{ recovered }}</div>
+    </div>
+  </div>
+
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Cracked entries</div>
+    <table id="hashfile_table" class="display nowrap w-full text-sm"></table>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Top passwords</div>
+    <div id="top_password_graph" class="h-56"></div>
+  </div>
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Password lengths</div>
+    <div id="pass_len_graph" class="h-56"></div>
+  </div>
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Password charsets</div>
+    <div id="top_pass_charset_graph" class="h-56"></div>
+  </div>
+</div>
+
+<script src="https://code.highcharts.com/highcharts.js"></script>
+<script>
+  window.hashfileConfig = {
+    crackedUrl: "{% url 'API:api_hashfile_cracked' hashfile.id %}",
+    topPasswordsUrl: "{% url 'API:api_hashfile_top_password' hashfile.id 10 %}",
+    passwordLengthsUrl: "{% url 'API:api_hashfile_top_password_len' hashfile.id 10 %}",
+    passwordCharsetUrl: "{% url 'API:api_hashfile_top_password_charset' hashfile.id 10 %}",
+    firstColumnTitle: "{{ hashfile.username_included|yesno:'Username,Hash' }}",
+  };
+</script>
+<script src="{% static 'js/hashfile.js' %}"></script>
+{% endblock %}

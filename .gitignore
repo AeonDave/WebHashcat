@@ -1,35 +1,38 @@
 # --- Project configuration ---
-WebHashcat/WebHashcat/settings.py
-WebHashcat/settings.ini
-WebHashcat/db.sqlite3
-WebHashcat/celerybeat.pid
-WebHashcat/celerybeat-schedule
-HashcatNode/settings.ini
-HashcatNode/hashcatnode.db
-HashcatNode/hashcatnode.log
+UIHashcat/db.sqlite3
+UIHashcat/celerybeat.pid
+UIHashcat/celerybeat-schedule
+NodeHashcat/hashcatnode.db
+NodeHashcat/hashcatnode.log
 
 # --- Uploaded / generated files ---
-WebHashcat/Files/potfile*
-WebHashcat/Files/tmp/*
-!WebHashcat/Files/tmp/.gitkeep
-WebHashcat/Files/Hashfiles/**
-!WebHashcat/Files/Hashfiles/.gitkeep
-WebHashcat/Files/Crackedfiles/*.crackedfile
-WebHashcat/Files/Maskfiles/*.hcmask
-WebHashcat/Files/Rulefiles/*.rule
-WebHashcat/Files/Wordlistfiles/*.wordlist
-WebHashcat/Files/Searches/**
-!WebHashcat/Files/Searches/.gitkeep
+UIHashcat/Files/potfile*
+UIHashcat/Files/tmp/*
+UIHashcat/Files/Hashfiles/**
+UIHashcat/Files/Crackedfiles/*.crackedfile
+UIHashcat/Files/Maskfiles/*.hcmask
+UIHashcat/Files/Rulefiles/*.rule
+UIHashcat/Files/Wordlistfiles/*.wordlist
+UIHashcat/Files/**/*.zip
+UIHashcat/Files/**/*.gz
+UIHashcat/Files/**/*.7z
+UIHashcat/Files/**/*.json
+UIHashcat/Files/Searches/**
+!UIHashcat/**/.gitkeep
 
 # --- Hashcat node assets ---
-HashcatNode/*.crt
-HashcatNode/*.key
-HashcatNode/hashes/*.list
-HashcatNode/rules/*.rule
-HashcatNode/masks/*.hcmask
-HashcatNode/potfiles/*.potfile
-HashcatNode/wordlists/*.wordlist
-HashcatNode/outputs/*.output
+NodeHashcat/**/*.crt
+NodeHashcat/**/*.key
+NodeHashcat/**/*.list
+NodeHashcat/**/*.rule
+NodeHashcat/**/*.hcmask
+NodeHashcat/**/*.potfile
+NodeHashcat/**/*.wordlist
+NodeHashcat/**/*.output
+NodeHashcat/**/*.zip
+NodeHashcat/**/*.gz
+NodeHashcat/**/*.7z
+NodeHashcat/**/*.json
 
 # --- Python cache / build output ---
 __pycache__/
@@ -90,7 +93,6 @@ instance/
 .python-version
 celerybeat-schedule
 .env
-.env.*
 *.env
 .spyderproject
 .ropeproject

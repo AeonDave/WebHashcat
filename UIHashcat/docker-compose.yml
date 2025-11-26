@@ -1,0 +1,83 @@
+services:
+  db:
+    image: mysql:8.0
+    env_file:
+      - ../.env
+    restart: unless-stopped
+    networks:
+      - webhashcat
+    healthcheck:
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - webhashcat
+    healthcheck:
+      test: ["CMD", "redis-cli","ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+    command: python3 manage.py runserver 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      - HASHCAT_BRAIN_HOST=${HASHCAT_BRAIN_HOST:-webhashcat-brain}
+    volumes:
+      - ./Files:/webhashcat/Files
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - webhashcat
+
+  celery:
+    build:
+      context: .
+    command: celery -A WebHashcat worker -B -l info
+    env_file:
+      - ../.env
+    environment:
+      - HASHCAT_BRAIN_HOST=${HASHCAT_BRAIN_HOST:-webhashcat-brain}
+    volumes:
+      - ./Files:/webhashcat/Files
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - webhashcat
+
+  brain:
+    image: dizcza/docker-hashcat:pocl
+    container_name: webhashcat-brain
+    # Use a shell so the password is read from the container env (env_file) without compose-time substitution
+    command:
+      - /bin/sh
+      - -c
+      - "/usr/local/bin/hashcat --brain-server --brain-host 0.0.0.0 --brain-port 13743 --brain-password \"$${HASHCAT_BRAIN_PASSWORD}\""
+    restart: unless-stopped
+    networks:
+      - webhashcat
+    ports:
+      - "13743:13743"
+
+networks:
+  webhashcat:
+    driver: bridge
+    name: webhashcat-net

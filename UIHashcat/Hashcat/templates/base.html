@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+{% load static %}
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <title>WebHashcat - {% block title %}{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
+    <!-- Tailwind + Flowbite -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              primary: '#22d3ee',
+              accent: '#f97316',
+              surface: '#0f172a',
+              panel: '#111827',
+              muted: '#6b7280',
+            }
+          }
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.5.1/flowbite.min.css" />
+    <!-- DataTables -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.5.0/css/responsive.dataTables.min.css">
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
+    <!-- Flowbite JS -->
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.5.1/flowbite.min.js"></script>
+    <!-- Flatpickr for date/time -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <!-- Shared modal helpers (used by hashes.js, search.js, etc.) -->
+    <script src="{% static 'js/modals.js' %}"></script>
+    <style>
+      body { background: #0b1220; color: #e5e7eb; }
+      .nav-link { display:block; padding:10px 12px; border-radius:8px; color:#9ca3af; font-weight:500; }
+      .nav-link:hover { background:#111827; color:#e5e7eb; }
+      .nav-link.active { background:#111827; color:#22d3ee; border:1px solid #1f2937; }
+      .card { background: #111827; border: 1px solid #1f2937; }
+    </style>
+</head>
+<body class="dark bg-[#0b1220] text-gray-100">
+<div id="sync-overlay" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center">
+  <div class="flex flex-col items-center gap-3 text-primary">
+    <svg class="w-10 h-10 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke-width="4"></circle>
+      <path class="opacity-75" stroke-width="4" d="M4 12a8 8 0 018-8"></path>
+    </svg>
+    <div class="text-gray-100 text-sm">Synchronizing… please wait</div>
+  </div>
+</div>
+<div class="flex min-h-screen">
+  <aside class="w-64 bg-[#0d1324] border-r border-gray-800 hidden md:flex flex-col">
+    <div class="px-6 py-6 text-2xl font-semibold tracking-tight text-primary">D Hashcat</div>
+    <nav class="flex-1 px-4 space-y-1">
+      <a href="{% url 'Hashcat:index' %}" class="nav-link {% if Section == 'Dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="{% url 'Hashcat:hashfiles' %}" class="nav-link {% if Section == 'Hashes' %}active{% endif %}">Hashes</a>
+      <a href="{% url 'Hashcat:files' %}" class="nav-link {% if Section == 'Files' %}active{% endif %}">Files</a>
+      <a href="{% url 'Hashcat:search' %}" class="nav-link {% if Section == 'Search' %}active{% endif %}">Search</a>
+      <a href="{% url 'Nodes:nodes' %}" class="nav-link {% if Section == 'Nodes' %}active{% endif %}">Nodes</a>
+    </nav>
+    {% if user.is_authenticated %}
+    <div class="px-4 py-4 text-sm text-gray-400">Connected: {{ user.username }} | <a class="text-primary hover:underline" href="{% url 'Auth:logout' %}">Logout</a></div>
+    {% endif %}
+  </aside>
+
+  <main class="flex-1 flex flex-col">
+    <header class="flex items-center justify-between px-4 md:px-6 py-4 border-b border-gray-800 bg-[#0f172a]">
+      <div class="text-xl font-semibold text-gray-100">{% block breadcrumb %}{% endblock %}</div>
+      <div class="flex items-center gap-3">
+      </div>
+    </header>
+
+    <section class="flex-1 px-4 md:px-6 py-6 bg-[#0b1220]">
+      {% block content %}{% endblock %}
+    </section>
+  </main>
+</div>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const overlay = document.getElementById('sync-overlay');
+    function showOverlay() {
+      if (overlay) overlay.classList.remove('hidden');
+    }
+    document.querySelectorAll('form[data-sync-form]').forEach(form => {
+      form.addEventListener('submit', () => showOverlay());
+    });
+  });
+</script>
+</body>
+</html>

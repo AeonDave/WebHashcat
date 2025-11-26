@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Login{% endblock %}
+{% block breadcrumb %}Login{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-center min-h-[60vh]">
+  <div class="card rounded-xl p-8 w-full max-w-md">
+    <div class="mb-6 text-center">
+      <h1 class="text-2xl font-semibold text-gray-100">WebHashcat</h1>
+      <p class="mt-1 text-sm text-gray-400">Accedi per gestire i tuoi job di cracking</p>
+    </div>
+
+    {% if error_message %}
+    <div class="mb-4 rounded border border-red-700 bg-red-900/40 text-red-200 text-sm px-3 py-2">
+      {{ error_message }}
+    </div>
+    {% endif %}
+
+    <form action="{% url "Auth:auth" %}" method="post" class="space-y-4">
+      {% csrf_token %}
+      <div>
+        <label for="inputUsername" class="block text-sm mb-1">Username</label>
+        <input
+          type="text"
+          id="inputUsername"
+          name="username"
+          class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-primary"
+          placeholder="Username"
+          required
+          autofocus>
+      </div>
+
+      <div>
+        <label for="inputPassword" class="block text-sm mb-1">Password</label>
+        <input
+          type="password"
+          id="inputPassword"
+          name="password"
+          class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-primary"
+          placeholder="Password"
+          required>
+      </div>
+
+      <button
+        class="w-full mt-2 px-4 py-2 rounded bg-primary text-black font-semibold text-sm hover:bg-cyan-300 transition"
+        type="submit">
+        Accedi
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+

@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% load static %}
+{% block breadcrumb %}Files{% endblock %}
+{% block title %}Files{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 gap-6">
+  <!-- Dropzones -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="card rounded-xl p-4">
+      <div class="text-lg font-semibold mb-2">Wordlists</div>
+      <form id="drop_wordlist" action="{% url 'Hashcat:upload_wordlist' %}" method="post" enctype="multipart/form-data" class="dropzone relative flex items-center justify-center border-2 border-dashed border-gray-700 rounded-lg h-32 text-sm text-gray-400">
+        {% csrf_token %}
+        <input type="file" name="file" multiple class="hidden" />
+        <span>Drop wordlists here or click to browse</span>
+      </form>
+    </div>
+    <div class="card rounded-xl p-4">
+      <div class="text-lg font-semibold mb-2">Rules</div>
+      <form id="drop_rule" action="{% url 'Hashcat:upload_rule' %}" method="post" enctype="multipart/form-data" class="dropzone relative flex items-center justify-center border-2 border-dashed border-gray-700 rounded-lg h-32 text-sm text-gray-400">
+        {% csrf_token %}
+        <input type="file" name="file" multiple class="hidden" />
+        <span>Drop rules here or click to browse</span>
+      </form>
+    </div>
+    <div class="card rounded-xl p-4">
+      <div class="text-lg font-semibold mb-2">Masks</div>
+      <form id="drop_mask" action="{% url 'Hashcat:upload_mask' %}" method="post" enctype="multipart/form-data" class="dropzone relative flex items-center justify-center border-2 border-dashed border-gray-700 rounded-lg h-32 text-sm text-gray-400">
+        {% csrf_token %}
+        <input type="file" name="file" multiple class="hidden" />
+        <span>Drop masks here or click to browse</span>
+      </form>
+    </div>
+  </div>
+
+  <!-- Lists -->
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Rules</div>
+    <table class="w-full text-sm">
+      <thead class="text-gray-400">
+      <tr>
+        <th class="text-left py-2">Name</th>
+        <th class="text-left py-2">MD5</th>
+        <th class="text-left py-2">Lines</th>
+        <th class="text-right py-2">Actions</th>
+      </tr>
+      </thead>
+      <tbody>
+      {% for rule in rule_list %}
+      <tr class="border-t border-gray-800">
+        <td class="py-2">{{ rule.name }}</td>
+        <td class="py-2">{{ rule.md5 }}</td>
+        <td class="py-2">{{ rule.lines }}</td>
+        <td class="py-2 text-right">
+          <form style="display:inline;" action="{% url "Hashcat:files" %}" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="remove">
+            <input type="hidden" name="filetype" value="rule">
+            <input type="hidden" name="filename" value="{{ rule.name }}">
+            <button type="submit" class="px-2 py-1 rounded bg-red-900/40 border border-red-700 text-red-200 text-xs">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Masks</div>
+    <table class="w-full text-sm">
+      <thead class="text-gray-400">
+      <tr>
+        <th class="text-left py-2">Name</th>
+        <th class="text-left py-2">MD5</th>
+        <th class="text-left py-2">Lines</th>
+        <th class="text-right py-2">Actions</th>
+      </tr>
+      </thead>
+      <tbody>
+      {% for mask in mask_list %}
+      <tr class="border-t border-gray-800">
+        <td class="py-2">{{ mask.name }}</td>
+        <td class="py-2">{{ mask.md5 }}</td>
+        <td class="py-2">{{ mask.lines }}</td>
+        <td class="py-2 text-right">
+          <form style="display:inline;" action="{% url "Hashcat:files" %}" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="remove">
+            <input type="hidden" name="filetype" value="mask">
+            <input type="hidden" name="filename" value="{{ mask.name }}">
+            <button type="submit" class="px-2 py-1 rounded bg-red-900/40 border border-red-700 text-red-200 text-xs">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card rounded-xl p-4">
+    <div class="text-lg font-semibold mb-2">Wordlists</div>
+    <table class="w-full text-sm">
+      <thead class="text-gray-400">
+      <tr>
+        <th class="text-left py-2">Name</th>
+        <th class="text-left py-2">MD5</th>
+        <th class="text-left py-2">Lines</th>
+        <th class="text-right py-2">Actions</th>
+      </tr>
+      </thead>
+      <tbody>
+      {% for wordlist in wordlist_list %}
+      <tr class="border-t border-gray-800">
+        <td class="py-2">{{ wordlist.name }}</td>
+        <td class="py-2">{{ wordlist.md5 }}</td>
+        <td class="py-2">{{ wordlist.lines }}</td>
+        <td class="py-2 text-right">
+          <form style="display:inline;" action="{% url "Hashcat:files" %}" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="remove">
+            <input type="hidden" name="filetype" value="wordlist">
+            <input type="hidden" name="filename" value="{{ wordlist.name }}">
+            <button type="submit" class="px-2 py-1 rounded bg-red-900/40 border border-red-700 text-red-200 text-xs">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  window.filesConfig = {
+    csrf: '{{ csrf_token }}',
+    dropzones: {
+      drop_wordlist: "{% url 'Hashcat:upload_wordlist' %}",
+      drop_rule: "{% url 'Hashcat:upload_rule' %}",
+      drop_mask: "{% url 'Hashcat:upload_mask' %}",
+    },
+  };
+</script>
+<script src="{% static 'js/files.js' %}"></script>
+{% endblock %}

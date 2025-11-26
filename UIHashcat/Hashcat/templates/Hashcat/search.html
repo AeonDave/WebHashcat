@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% load static %}
+{% block breadcrumb %}Search{% endblock %}
+{% block title %}Search{% endblock %}
+
+{% block content %}
+<div id="messages" class="mb-4"></div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+  <div class="card rounded-xl p-4 md:col-span-1">
+    <div class="text-lg font-semibold mb-3">Search options</div>
+    <form enctype="multipart/form-data" method="post" class="space-y-3">
+      {% csrf_token %}
+      <label class="block text-sm">Search name
+        <input class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1" id="inputSearchName" name="search_name" placeholder="">
+      </label>
+      <label class="block text-sm">Pattern in username
+        <input class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1" id="inputUserPattern" name="search_pattern" placeholder="Use semicolon as separator">
+      </label>
+      <div class="flex items-center gap-2 text-sm">
+        <input type="checkbox" class="accent-primary" name="all_hashfiles" value="all_hashfiles">
+        <span>Search in all hashfiles</span>
+      </div>
+      <div>
+        <div class="text-sm mb-1">Hashfiles</div>
+        <div class="border border-gray-700 rounded-lg h-72 overflow-y-auto p-2 space-y-1">
+          {% for hashfile in hashfile_list %}
+          {% if hashfile.owner == request.user or request.user.is_staff %}
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" class="accent-primary" name="hashfile_search[]" value="{{ hashfile.id }}"> {{ hashfile.name }}
+          </label>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-sm">
+        <input type="checkbox" class="accent-primary" name="ignore_uncracked" value="ignore_uncracked">
+        <span>Ignore uncracked results</span>
+      </div>
+      <div class="flex justify-end">
+        <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Search</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card rounded-xl p-4 md:col-span-2">
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-lg font-semibold text-gray-100">Searches</div>
+      <button id="update_searches" class="px-3 py-1.5 text-sm rounded-md bg-primary/20 text-primary border border-primary/40 hover:bg-primary/30">Update</button>
+    </div>
+    <table id="search_table" class="display nowrap w-full text-sm"></table>
+  </div>
+</div>
+
+<!-- Modal: view search results -->
+<div id="search_view_modal" tabindex="-1" aria-hidden="true" class="fixed top-0 left-0 right-0 z-50 hidden w-full p-4 overflow-x-hidden overflow-y-auto md:inset-0 h-full">
+  <div class="relative w-full max-w-4xl">
+    <div class="relative rounded-lg shadow card p-6">
+      <div class="flex items-center justify-between border-b border-gray-800 pb-3 mb-4">
+        <h3 class="text-xl font-semibold text-gray-100">Search results</h3>
+        <button type="button" class="text-gray-400 hover:text-white" data-modal-hide="search_view_modal">&times;</button>
+      </div>
+      <div class="max-h-[60vh] overflow-y-auto bg-[#0b1220] border border-gray-800 rounded p-3 text-sm text-gray-100 whitespace-pre-wrap" id="search_view_body">
+      </div>
+      <div class="flex justify-end mt-4">
+        <button type="button" data-modal-hide="search_view_modal" class="px-3 py-1.5 rounded border border-gray-700 text-gray-300">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  window.searchConfig = {
+    listUrl: "{% url 'API:api_search_list' %}",
+    actionUrl: "{% url 'API:api_search_action' %}",
+  };
+</script>
+<script src="{% static 'js/search.js' %}"></script>
+{% endblock %}

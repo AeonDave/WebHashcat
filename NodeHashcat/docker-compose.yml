@@ -1,0 +1,167 @@
+services:
+   node-cuda:
+      profiles:
+         - cuda
+      container_name: hashcatnode-cuda
+      build:
+         context: .
+         args:
+            HASHCAT_BASE: dizcza/docker-hashcat:cuda
+            HASHCAT_BINARY: /usr/local/bin/hashcat
+      ports:
+         - "9999:9999"
+      env_file:
+         - ../.env
+      environment:
+         - NVIDIA_VISIBLE_DEVICES=all
+         - HASHCATNODE_DEVICE_TYPE=2
+      restart: unless-stopped
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+      deploy:
+         resources:
+            reservations:
+               devices:
+                  - driver: nvidia
+                    count: all
+                    capabilities:
+                      - gpu
+      networks:
+         - webhashcat
+
+   node-intel-cpu:
+      profiles:
+         - intel-cpu
+      container_name: hashcatnode-intel-cpu
+      build:
+         context: .
+         args:
+            HASHCAT_BASE: dizcza/docker-hashcat:intel-cpu
+            HASHCAT_BINARY: /usr/local/bin/hashcat
+      ports:
+         - "9999:9999"
+      env_file:
+         - ../.env
+      environment:
+         - HASHCATNODE_DEVICE_TYPE=1
+      restart: unless-stopped
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+      networks:
+         webhashcat:
+            aliases:
+               - hashcatnode-cpu
+
+   node-amd-gpu:
+      profiles:
+         - amd-gpu
+      container_name: hashcatnode-amd-gpu
+      build:
+         context: .
+         args:
+            HASHCAT_BASE: dizcza/docker-hashcat:latest
+            HASHCAT_BINARY: /usr/local/bin/hashcat
+      ports:
+         - "9999:9999"
+      env_file:
+         - ../.env
+      environment:
+         - HASHCATNODE_DEVICE_TYPE=2
+      restart: unless-stopped
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+      networks:
+         webhashcat:
+            aliases:
+               - hashcatnode-amd-gpu
+
+   node-intel-gpu:
+      profiles:
+         - intel-gpu
+      container_name: hashcatnode-intel-gpu
+      build:
+         context: .
+         args:
+            HASHCAT_BASE: dizcza/docker-hashcat:intel-gpu
+            HASHCAT_BINARY: /usr/local/bin/hashcat
+      ports:
+         - "9999:9999"
+      env_file:
+         - ../.env
+      environment:
+         - HASHCATNODE_DEVICE_TYPE=2
+      restart: unless-stopped
+      devices:
+         - /dev/dri:/dev/dri
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+      networks:
+         webhashcat:
+            aliases:
+               - hashcatnode-intel-gpu
+
+   node-pocl:
+      profiles:
+         - pocl
+      container_name: hashcatnode-pocl
+      build:
+         context: .
+         args:
+            HASHCAT_BASE: dizcza/docker-hashcat:pocl
+            HASHCAT_BINARY: /usr/local/bin/hashcat
+      ports:
+         - "9999:9999"
+      env_file:
+         - ../.env
+      environment:
+         - HASHCATNODE_DEVICE_TYPE=1
+      restart: unless-stopped
+      volumes:
+         - ./hashes:/hashcatnode/hashes
+         - ./rules:/hashcatnode/rules
+         - ./wordlists:/hashcatnode/wordlists
+         - ./masks:/hashcatnode/masks
+         - ./outputs:/hashcatnode/outputs
+         - ./potfiles:/hashcatnode/potfiles
+         - ./certs:/hashcatnode/certs
+         - hashcatnode-db:/hashcatnode/data
+      networks:
+         webhashcat:
+            aliases:
+               - hashcatnode-cpu-pocl
+
+networks:
+   webhashcat:
+      external: true
+      name: webhashcat-net
+
+volumes:
+   hashcatnode-db:
