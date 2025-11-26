@@ -35,7 +35,9 @@ RUN test -f ${HASHCAT_BINARY} && echo "Hashcat binary found at ${HASHCAT_BINARY}
 
 # Runtime bootstrap ensures DB and launches node
 COPY entrypoint.sh /usr/local/bin/hashcatnode-entrypoint.sh
-RUN chmod +x /usr/local/bin/hashcatnode-entrypoint.sh
+# Normalize line endings in case the script was edited on Windows
+RUN sed -i 's/\r$//' /usr/local/bin/hashcatnode-entrypoint.sh && \
+    chmod +x /usr/local/bin/hashcatnode-entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/hashcatnode-entrypoint.sh"]
 CMD ["python3", "/hashcatnode/hashcatnode.py"]
