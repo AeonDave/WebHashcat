@@ -195,6 +195,7 @@ class SessionControlViewTests(TestCase):
     @patch("Hashcat.views.random.choice", return_value="Z")
     def test_create_dictionary_session(self, mock_choice, mock_api_cls):
         mock_api = mock_api_cls.return_value
+        mock_api.get_hashcat_info.return_value = {"response": "ok", "device_type": 1, "system": {}}
         mock_api.create_dictionary_session.return_value = {"response": "ok"}
 
         payload = {
@@ -203,8 +204,6 @@ class SessionControlViewTests(TestCase):
             "crack_type": "dictionary",
             "rule": "best64",
             "wordlist": "rockyou.txt",
-            "device_type": "1",
-            "brain_mode": "0",
             "end_datetime": "",
         }
 
@@ -213,14 +212,17 @@ class SessionControlViewTests(TestCase):
 
         created_session = Session.objects.get()
         self.assertTrue(created_session.name.startswith("hf-"))
+        mock_api.get_hashcat_info.assert_called_once()
         mock_api.create_dictionary_session.assert_called_once()
         called_session_name = mock_api.create_dictionary_session.call_args[0][0]
         self.assertEqual(created_session.name, called_session_name)
+        self.assertEqual(mock_api.create_dictionary_session.call_args[0][4], 1)
 
     @patch("Hashcat.views.HashcatAPI")
     @patch("Hashcat.views.random.choice", return_value="Y")
     def test_create_mask_session(self, mock_choice, mock_api_cls):
         mock_api = mock_api_cls.return_value
+        mock_api.get_hashcat_info.return_value = {"response": "ok", "device_type": 2, "system": {}}
         mock_api.create_mask_session.return_value = {"response": "ok"}
 
         payload = {
@@ -228,8 +230,6 @@ class SessionControlViewTests(TestCase):
             "hashfile_id": str(self.hashfile.id),
             "crack_type": "mask",
             "mask": "?d?d?d",
-            "device_type": "2",
-            "brain_mode": "1",
             "end_datetime": "",
         }
 
@@ -237,7 +237,9 @@ class SessionControlViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
 
         self.assertEqual(Session.objects.count(), 1)
+        mock_api.get_hashcat_info.assert_called_once()
         mock_api.create_mask_session.assert_called_once()
+        self.assertEqual(mock_api.create_mask_session.call_args[0][3], 2)
 
 
 class FileCleanupTests(TestCase):

@@ -221,7 +221,8 @@ class HashcatAPI(object):
             "Accept-Encoding": "text/plain",
             "Authorization": "Basic %s" % self.key,
         }
-        if BRAIN_HOST_HINT:
+        # Hint Brain host only when explicitly configured (avoid leaking Docker-only hostnames to LAN nodes)
+        if BRAIN_HOST_HINT and BRAIN_HOST_HINT.lower() not in {"webhashcat-brain", "brain"}:
             headers["X-Hashcat-Brain-Host"] = BRAIN_HOST_HINT
         return headers
 

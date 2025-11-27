@@ -11,6 +11,7 @@ from Nodes.models import Node
 from Utils.hashcat import Hashcat
 from Utils.hashcatAPI import HashcatAPI, HashcatAPIError
 from Utils.hashcat_cache import HashcatSnapshotCache
+from Utils.node_capabilities import summarize_capabilities
 from Utils.session_snapshot import SessionSnapshot
 from Utils.tasks import import_hashfile_task, run_search_task
 from Utils.utils import Echo
@@ -188,15 +189,24 @@ def hashfiles(request):
     context["rule_list"] = [{'name': None}] + sorted(Hashcat.get_rules(detailed=False), key=itemgetter('name'))
     context["mask_list"] = sorted(Hashcat.get_masks(detailed=False), key=itemgetter('name'))
     context["wordlist_list"] = sorted(Hashcat.get_wordlists(detailed=False), key=itemgetter('name'))
-    node_devices = {}
+    node_capabilities = {}
+    node_options = []
     for node in context["node_list"]:
+        info = None
         try:
             api = HashcatAPI(node.hostname, node.port, node.username, node.password)
             info = api.get_hashcat_info()
-            node_devices[node.name] = info.get("device_type") if info else None
+            if info and info.get("response") == "error":
+                info = None
         except HashcatAPIError:
-            node_devices[node.name] = None
-    context["node_device_map_json"] = json.dumps(node_devices)
+            info = None
+        caps = summarize_capabilities(info)
+        node_capabilities[node.name] = caps
+        label = caps.get("short_label") or "unknown"
+        option_label = f"{node.name} ({label})" if label != "unknown" else f"{node.name} (unknown device)"
+        node_options.append({"name": node.name, "label": option_label})
+    context["node_options"] = node_options
+    context["node_capabilities"] = node_capabilities
 
     template = loader.get_template('Hashcat/hashes.html')
     return HttpResponse(template.render(context, request))
@@ -292,8 +302,6 @@ def new_session(request):
         elif crack_type == "mask":
             mask = request.POST["mask"]
 
-        device_type = int(request.POST["device_type"])
-
         if request.POST["end_datetime"]:
             end_timestamp = int(datetime.strptime(request.POST["end_datetime"], "%m/%d/%Y %I:%M %p").timestamp())
         else:
@@ -316,6 +324,12 @@ def new_session(request):
             return redirect('Hashcat:hashfiles')
         node_name = request.POST["node"]
 
+        def _brain_mode_for_hash(hash_type_id: int) -> int:
+            # Hash veloci (id < 1000) usano solo la feature "attacks" per evitare saturazione del brain.
+            if hash_type_id is not None and hash_type_id >= 0 and hash_type_id < 1000:
+                return 2
+            return 3
+
         # Modalità standard: un singolo nodo, nessun Brain esplicito dalla UI.
         if node_name != "__brain_cluster__":
             node = get_object_or_404(Node, name=node_name)
@@ -324,6 +338,16 @@ def new_session(request):
 
             try:
                 hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+                node_info = hashcat_api.get_hashcat_info()
+                if not node_info or node_info.get("response") == "error":
+                    msg = node_info.get("message") if node_info else "Node did not return hashcat info"
+                    messages.error(request, f"Unable to read node capabilities from {node_name}: {msg}")
+                    return redirect('Hashcat:hashfiles')
+                capabilities = summarize_capabilities(node_info)
+                device_type = capabilities.get("device_type")
+                if device_type is None:
+                    messages.error(request, f"Unable to detect device type for node {node_name}; synchronize the node and try again.")
+                    return redirect('Hashcat:hashfiles')
                 if crack_type == "dictionary":
                     res = hashcat_api.create_dictionary_session(
                         session_name,
@@ -372,7 +396,7 @@ def new_session(request):
 
         # Modalità Brain cluster: crea una sessione per ogni nodo con Brain attivo.
         else:
-            brain_mode = 3
+            brain_mode = _brain_mode_for_hash(hashfile.hash_type)
             created = 0
             errors = []
 
@@ -394,6 +418,12 @@ def new_session(request):
 
                 if not info.get("brain_host_set"):
                     errors.append(f"Node {node.name} has Brain enabled but no host detected; retry after WebHashcat has contacted it or set [Brain].host")
+                    continue
+
+                capabilities = summarize_capabilities(info)
+                device_type = capabilities.get("device_type")
+                if device_type is None:
+                    errors.append(f"Node {node.name} did not report a usable device type")
                     continue
 
                 session_name = f"{base_id}-{node.name}"

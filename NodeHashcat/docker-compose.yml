@@ -73,6 +73,7 @@ services:
       build:
          context: .
          args:
+            # Usa l'immagine generica con backend OpenCL; hashcat sceglierà AMD/ROCm se disponibile
             HASHCAT_BASE: dizcza/docker-hashcat:latest
             HASHCAT_BINARY: /usr/local/bin/hashcat
       ports:
@@ -81,6 +82,7 @@ services:
          - ../.env
       environment:
          - HASHCATNODE_DEVICE_TYPE=2
+         - HASHCAT_EXTRA_OPTS=--backend-ignore-cuda
       restart: unless-stopped
       volumes:
          - ./hashes:/hashcatnode/hashes

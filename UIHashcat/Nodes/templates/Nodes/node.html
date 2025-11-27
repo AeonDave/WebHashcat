@@ -11,6 +11,7 @@
         <p class="text-xs text-gray-400">Hostname {{ hostname }} : {{ port }}</p>
         <div class="text-xs text-gray-400 space-y-1 mt-2">
           {% with sys=system %}
+          <div>Type: {{ capabilities.full_label|default:"Unknown device" }}{% if capabilities.short_label and capabilities.short_label != "unknown" %} ({{ capabilities.short_label }}){% endif %}</div>
           <div>OS: {{ sys.os|default:"Unknown" }} ({{ sys.environment|default:"" }})</div>
           <div>CPU: {{ sys.cpu_model|default:"Unknown" }} ({{ sys.cpu_count|default:"?" }} cores)</div>
           <div>RAM: {% if sys.memory_bytes %}{{ sys.memory_bytes|filesizeformat }}{% else %}Unknown{% endif %}</div>

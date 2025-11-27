@@ -100,20 +100,15 @@
             {% csrf_token %}
             <input type="hidden" name="crack_type" value="dictionary">
             <input type="hidden" id="hashfile_id_dict" name="hashfile_id">
-            <div class="md:col-span-2">
-              <div class="text-sm mb-1">Device / cluster mode</div>
-              <div id="device_type_label_dict" class="text-primary text-sm">Detecting from node.</div>
-              <input type="hidden" name="device_type" id="device_type_input_dict" value="1">
-            </div>
             <label class="block text-sm">Node / Brain cluster
               <select name="node" id="node_dict" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
-                {% for node in node_list %}
-                <option value="{{ node.name }}">{{ node.name }}</option>
+                {% for node in node_options %}
+                <option value="{{ node.name }}">{{ node.label }}</option>
                 {% endfor %}
                 <option value="__brain_cluster__">Brain cluster (all Brain-enabled nodes)</option>
               </select>
               <p class="text-xs text-gray-400 mt-1">
-                Se scegli "Brain cluster" verranno create più sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
+                Il tipo di nodo e' indicato tra parentesi. Se scegli "Brain cluster" verranno create piu' sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
               </p>
             </label>
             <label class="block text-sm">Hash type
@@ -163,20 +158,15 @@
             {% csrf_token %}
             <input type="hidden" name="crack_type" value="mask">
             <input type="hidden" id="hashfile_id_mask" name="hashfile_id">
-            <div class="md:col-span-2">
-              <div class="text-sm mb-1">Device type</div>
-              <div id="device_type_label_mask" class="text-primary text-sm">Detecting from node.</div>
-              <input type="hidden" name="device_type" id="device_type_input_mask" value="1">
-            </div>
             <label class="block text-sm">Node / Brain cluster
               <select name="node" id="node_mask" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
-                {% for node in node_list %}
-                <option value="{{ node.name }}">{{ node.name }}</option>
+                {% for node in node_options %}
+                <option value="{{ node.name }}">{{ node.label }}</option>
                 {% endfor %}
                 <option value="__brain_cluster__">Brain cluster (all Brain-enabled nodes)</option>
               </select>
               <p class="text-xs text-gray-400 mt-1">
-                Se scegli "Brain cluster" verranno create più sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
+                Il tipo di nodo e' indicato tra parentesi. Se scegli "Brain cluster" verranno create piu' sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
               </p>
             </label>
             <label class="block text-sm">Mask
@@ -220,7 +210,6 @@
       clusterActionUrl: "{% url 'API:api_cluster_action' %}",
       hashfileActionUrl: "{% url 'API:api_hashfile_action' %}",
       messagesUrl: "{% url 'API:api_get_messages' %}",
-      nodeDeviceMap: {{ node_device_map_json|default:"{}"|safe }},
     };
 </script>
 <script src="{% static 'js/hashes.js' %}"></script>

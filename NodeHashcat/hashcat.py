@@ -703,11 +703,18 @@ class Session(Model):
         self.time_estimated = "N/A"
         self.speed = "N/A"
         self.recovered = "N/A"
+        self.last_progress_seen = time.time()
 
     def start(self):
         if os.name == 'nt':
             if Hashcat.number_ongoing_sessions() > 0:
                 raise Exception("Windows version of Hashcatnode only supports 1 running hashcat at a time")
+
+        if self.session_status == "Aborted":
+            # Treat Aborted as a fresh start (not a restore).
+            self.session_status = "Not started"
+            self.reason = ""
+            self.save()
 
         self.thread = threading.Thread(target=self.session_thread)
         self.thread.start()
@@ -719,163 +726,186 @@ class Session(Model):
         self.status()
 
     def session_thread(self):
-        # Prepare regex to parse the main hashcat process output
-        regex_list = [
-            ("hash_type", re.compile(r"^Hash\.Type\.+: +(.*)\s*$")),
-            ("speed", re.compile(r"^Speed\.#1\.+: +(.*)\s*$")),
-        ]
-        if self.crack_type == "dictionary":
-            regex_list.append(("progress", re.compile(r"^Progress\.+: +\d+/\d+ \((\S+)%\)\s*$")))
-            regex_list.append(("time_estimated", re.compile(r"^Time\.Estimated\.+: +(.*)\s*$")))
-        elif self.crack_type == "mask":
-            regex_list.append(("progress", re.compile(r"^Input\.Mode\.+: +Mask\s+\(\S+\)\s+\[\d+]\s+\((\S+)%\)\s*$")))
-
-        self.time_started = datetime.now(UTC)
-
-        cmd_line: List[str]
-        if not self.session_status in ["Aborted"]:
-            # Command lines used to crack the passwords
-            if self.crack_type == "dictionary":
-                cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0']
-                if self.hash_mode_id != -2:
-                    cmd_line += ['-m', str(self.hash_mode_id)]
-                cmd_line += [str(self.hash_file), str(self.wordlist_file)]
-                if self.rule_file:
-                    for rpath in str(self.rule_file).split(";"):
-                        if rpath:
-                            cmd_line += ['-r', str(rpath)]
-            elif self.crack_type == "mask":
-                cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '3']
-                if self.hash_mode_id != -2:
-                    cmd_line += ['-m', str(self.hash_mode_id)]
-                cmd_line += [str(self.hash_file), str(self.mask_file)]
-            else:
-                raise ValueError(f"Unsupported crack type: {self.crack_type}")
-            if self.username_included:
-                cmd_line += ["--username"]
-            if self.device_type:
-                cmd_line += ["-D", str(self.device_type)]
-            # workload profile
-            cmd_line += ["--workload-profile", str(Hashcat.workload_profile)]
-            if getattr(self, "kernel_optimized", False):
-                cmd_line.append("-O")
-            # set pot file
-            cmd_line += ["--potfile-path", self.pot_file]
-        else:
-            # resume previous session
-            cmd_line = [Hashcat.binary, '--session', self.name, '--restore']
-
-        # Brain client options
-        brain_cfg = getattr(Hashcat, "brain", {}) or {}
-        brain_enabled = str(brain_cfg.get('enabled', 'false')).lower() == 'true'
-        brain_host = str(brain_cfg.get('host', '') or '').strip()
-        if brain_enabled and brain_host and self.brain_mode != 0:
-            cmd_line += ['-z']
-            cmd_line += ['--brain-client-features', str(self.brain_mode)]
-            cmd_line += ['--brain-host', brain_host]
-            cmd_line += ['--brain-port', brain_cfg.get('port', Hashcat.brain.get('port'))]
-            cmd_line += ['--brain-password', brain_cfg.get('password', Hashcat.brain.get('password'))]
-
-        cmd_line = [str(item) for item in cmd_line]
-        flattened_cmd = " ".join(cmd_line)
-        LOGGER.info("Session %s startup command: %s", self.name, flattened_cmd)
-        LOGGER.debug("Session %s startup command: %s", self.name, flattened_cmd)
-        with open(self.hashcat_output_file, "a") as f:
-            f.write("Command: %s\n" % " ".join(map(str, cmd_line)))
-
-        self.session_status = "Running"
-        self.time_started = datetime.now(UTC)
-        self.save()
-
-        if os.name == 'nt':
-            console = self._require_win32console()
-            # To controlhashcat on Windows, very different implementation than on linux
-            # Look at:
-            # https://github.com/hashcat/hashcat/blob/9dffc69089d6c52e6f3f1a26440dbef140338191/src/terminal.c#L477
-            free_console = True
-            try:
-                console.AllocConsole()
-            except console.error as exc:
-                if exc.winerror != 5:
-                    raise
-                ## only free console if one was created successfully
-                free_console = False
-
-            self.win_stdin = console.GetStdHandle(console.STD_INPUT_HANDLE)
-
-        # cwd needs to be added for Windows version of hashcat
-        popen_kwargs = {
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "cwd": os.path.dirname(Hashcat.binary),
-        }
-        if os.name != 'nt':
-            popen_kwargs["stdin"] = subprocess.PIPE
-
-        if not os.path.exists(Hashcat.binary):
-            raise FileNotFoundError(f"Hashcat binary not found: {Hashcat.binary}")
-
-        if not os.path.exists(self.hash_file):
-            raise FileNotFoundError(f"Hash file not found: {self.hash_file}")
-
-        if self.wordlist_file and not os.path.exists(self.wordlist_file):
-            raise FileNotFoundError(f"Wordlist not found: {self.wordlist_file}")
-
-        LOGGER.info("Starting hashcat with command: %s", " ".join(cmd_line))
-
         try:
-            self.session_process = subprocess.Popen(cmd_line, **popen_kwargs)
-        except OSError as exc:
-            LOGGER.exception("Unable to launch hashcat process for session %s", self.name)
-            raise HashcatExecutionError(cmd_line, -1, None, str(exc)) from exc
+            # Prepare regex to parse the main hashcat process output
+            regex_list = [
+                ("hash_type", re.compile(r"^Hash\.Type\.+: +(.*)\s*$")),
+                ("speed", re.compile(r"^Speed\.#1\.+: +(.*)\s*$")),
+            ]
+            if self.crack_type == "dictionary":
+                regex_list.append(("progress", re.compile(r"^Progress\.+: +\d+/\d+ \((\S+)%\)\s*$")))
+                regex_list.append(("time_estimated", re.compile(r"^Time\.Estimated\.+: +(.*)\s*$")))
+            elif self.crack_type == "mask":
+                regex_list.append(("progress", re.compile(r"^Input\.Mode\.+: +Mask\s+\(\S+\)\s+\[\d+]\s+\((\S+)%\)\s*$")))
 
-        self.update_session()
+            self.time_started = datetime.now(UTC)
 
-        for line in self.session_process.stdout:
-            with open(self.hashcat_output_file, "ab") as f:
-                f.write(line)
+            cmd_line: List[str]
+            if not self.session_status in ["Aborted"]:
+                # Command lines used to crack the passwords
+                if self.crack_type == "dictionary":
+                    cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '0']
+                    if self.hash_mode_id != -2:
+                        cmd_line += ['-m', str(self.hash_mode_id)]
+                    cmd_line += [str(self.hash_file), str(self.wordlist_file)]
+                    if self.rule_file:
+                        for rpath in str(self.rule_file).split(";"):
+                            if rpath:
+                                cmd_line += ['-r', str(rpath)]
+                elif self.crack_type == "mask":
+                    cmd_line = [Hashcat.binary, '--session', self.name, '--status', '-a', '3']
+                    if self.hash_mode_id != -2:
+                        cmd_line += ['-m', str(self.hash_mode_id)]
+                    cmd_line += [str(self.hash_file), str(self.mask_file)]
+                else:
+                    raise ValueError(f"Unsupported crack type: {self.crack_type}")
+                if self.username_included:
+                    cmd_line += ["--username"]
+                if self.device_type:
+                    cmd_line += ["-D", str(self.device_type)]
+                # workload profile
+                cmd_line += ["--workload-profile", str(Hashcat.workload_profile)]
+                if getattr(self, "kernel_optimized", False):
+                    cmd_line.append("-O")
+                # set pot file
+                cmd_line += ["--potfile-path", self.pot_file]
+            else:
+                # resume previous session
+                cmd_line = [Hashcat.binary, '--session', self.name, '--restore']
 
-            line = line.decode()
-            line = line.rstrip()
+            # Brain client options
+            brain_cfg = getattr(Hashcat, "brain", {}) or {}
+            brain_enabled = str(brain_cfg.get('enabled', 'false')).lower() == 'true'
+            brain_host = str(brain_cfg.get('host', '') or '').strip()
+            if brain_enabled and brain_host and self.brain_mode != 0:
+                cmd_line += ['-z']
+                cmd_line += ['--brain-client-features', str(self.brain_mode)]
+                cmd_line += ['--brain-host', brain_host]
+                cmd_line += ['--brain-port', brain_cfg.get('port', Hashcat.brain.get('port'))]
+                cmd_line += ['--brain-password', brain_cfg.get('password', Hashcat.brain.get('password'))]
 
-            if line == "Resumed":
-                self.session_status = "Running"
-                self.save()
+            cmd_line = [str(item) for item in cmd_line]
+            flattened_cmd = " ".join(cmd_line)
+            LOGGER.info("Session %s startup command: %s", self.name, flattened_cmd)
+            LOGGER.debug("Session %s startup command: %s", self.name, flattened_cmd)
+            with open(self.hashcat_output_file, "a") as f:
+                f.write("Command: %s\n" % " ".join(map(str, cmd_line)))
 
-            if line == "Paused":
-                self.session_status = "Paused"
-                self.save()
+            self.session_status = "Running"
+            self.time_started = datetime.now(UTC)
+            self.save()
 
-            for var_regex in regex_list:
-                var = var_regex[0]
-                regex = var_regex[1]
+            if os.name == 'nt':
+                console = self._require_win32console()
+                free_console = True
+                try:
+                    console.AllocConsole()
+                except console.error as exc:
+                    if exc.winerror != 5:
+                        raise
+                    free_console = False
 
-                m = regex.match(line)
-                if m:
-                    setattr(self, var, m.group(1))
+                self.win_stdin = console.GetStdHandle(console.STD_INPUT_HANDLE)
 
-            # check timestamp
-            if self.end_timestamp:
-                current_timestamp = int(datetime.now(UTC).timestamp())
+            popen_kwargs = {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "cwd": os.path.dirname(Hashcat.binary),
+            }
+            if os.name != 'nt':
+                popen_kwargs["stdin"] = subprocess.PIPE
 
-                if current_timestamp > self.end_timestamp:
-                    self.quit()
-                    break
+            if not os.path.exists(Hashcat.binary):
+                raise FileNotFoundError(f"Hashcat binary not found: {Hashcat.binary}")
 
-        return_code = self.session_process.wait()
-        stderr_output = ""
-        if self.session_process.stderr:
+            if not os.path.exists(self.hash_file):
+                raise FileNotFoundError(f"Hash file not found: {self.hash_file}")
+
+            if self.wordlist_file and not os.path.exists(self.wordlist_file):
+                raise FileNotFoundError(f"Wordlist not found: {self.wordlist_file}")
+
+            LOGGER.info("Starting hashcat with command: %s", " ".join(cmd_line))
+
             try:
-                stderr_output = self.session_process.stderr.read().decode(errors="ignore")
-            except Exception:  # pragma: no cover - defensive path
-                stderr_output = ""
-        self._finalize_process_result(return_code, stderr_output)
+                self.session_process = subprocess.Popen(cmd_line, **popen_kwargs)
+            except OSError as exc:
+                LOGGER.exception("Unable to launch hashcat process for session %s", self.name)
+                raise HashcatExecutionError(cmd_line, -1, None, str(exc)) from exc
+
+            self.update_session()
+
+            for line in self.session_process.stdout:
+                with open(self.hashcat_output_file, "ab") as f:
+                    f.write(line)
+
+                line = line.decode()
+                line = line.rstrip()
+
+                if line == "Resumed":
+                    self.session_status = "Running"
+                    self.save()
+
+                if line == "Paused":
+                    self.session_status = "Paused"
+                    self.save()
+
+                for var_regex in regex_list:
+                    var = var_regex[0]
+                    regex = var_regex[1]
+
+                    m = regex.match(line)
+                    if m:
+                        setattr(self, var, m.group(1))
+                        if var == "progress":
+                            self.last_progress_seen = time.time()
+
+                # check timestamp
+                if self.end_timestamp:
+                    current_timestamp = int(datetime.now(UTC).timestamp())
+
+                    if current_timestamp > self.end_timestamp:
+                        self.quit()
+                        break
+
+            return_code = self.session_process.wait()
+            stderr_output = ""
+            if self.session_process.stderr:
+                try:
+                    stderr_output = self.session_process.stderr.read().decode(errors="ignore")
+                except Exception:  # pragma: no cover - defensive path
+                    stderr_output = ""
+            self._finalize_process_result(return_code, stderr_output)
+            LOGGER.info("Session %s thread completed (rc=%s)", self.name, return_code)
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.exception("Session %s crashed: %s", getattr(self, "name", "?"), exc)
+            self.session_status = "Error"
+            self.reason = str(exc)
+            self.save()
+        finally:
+            # Ensure finalization if the thread exits unexpectedly
+            if self.session_status in {"Running", "Paused"} and hasattr(self, "session_process"):
+                rc = None
+                try:
+                    rc = self.session_process.poll()
+                except Exception:
+                    rc = None
+                if rc is not None:
+                    self._finalize_process_result(rc, "")
 
     def details(self):
         def _serialize_dt(value):
             if not value:
                 return None
             return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+        # If the process has exited but status wasn't finalized (e.g., thread stuck), finalize now.
+        try:
+            if self.session_status in {"Running", "Paused"} and hasattr(self, "session_process"):
+                rc = self.session_process.poll()
+                if rc is not None:
+                    self._finalize_process_result(rc, "")
+        except Exception:
+            LOGGER.exception("Deferred finalization failed for session %s", self.name)
 
         return {
             "name": self.name,
@@ -976,6 +1006,9 @@ class Session(Model):
         elif return_code in [2, 3, 4]:
             self.session_status = "Aborted"
             reason = ""
+        elif return_code < 0:
+            self.session_status = "Aborted"
+            reason = f"Terminated (signal {abs(return_code)})"
         else:
             self.session_status = "Done"
             reason = ""
@@ -989,10 +1022,42 @@ class Session(Model):
         self.time_estimated = "N/A"
         self.speed = "N/A"
         self.save()
+        LOGGER.info(
+            "Session %s finalized with status=%s return_code=%s reason=%s",
+            self.name,
+            self.session_status,
+            return_code,
+            reason or "n/a",
+        )
         try:
             os.remove(self.hashcat_output_file)
         except:
             pass
+
+    def refresh_status(self) -> str:
+        """Ensure session_status reflects the underlying process state."""
+        if self.session_status in {"Running", "Paused"} and hasattr(self, "session_process"):
+            try:
+                rc = self.session_process.poll()
+            except Exception:  # pragma: no cover - defensive
+                rc = None
+            if rc is not None:
+                self._finalize_process_result(rc, "")
+            else:
+                # Watchdog: if no progress update for a long time, abort to avoid stuck sessions.
+                last_seen = getattr(self, "last_progress_seen", self.time_started or time.time())
+                if time.time() - last_seen > 300:
+                    LOGGER.warning("Session %s stalled (no progress update for >300s); forcing abort", self.name)
+                    try:
+                        self.session_process.terminate()
+                        try:
+                            self.session_process.wait(timeout=5)
+                        except Exception:
+                            self.session_process.kill()
+                    except Exception:
+                        LOGGER.exception("Failed to terminate stalled session %s", self.name)
+                    self._finalize_process_result(-9, "")
+        return self.session_status
 
     """
         Return cracked passwords
@@ -1113,6 +1178,19 @@ class Session(Model):
         if self.session_status not in ["Paused", "Running"]:
             return
 
+        forced_kill = False
+
+        def _force_kill(reason: str) -> None:
+            """Best-effort hard kill of the running process when graceful quit fails."""
+            nonlocal forced_kill
+            try:
+                if self.session_process and self.session_process.poll() is None:
+                    LOGGER.warning("Force killing hashcat process for session %s: %s", self.name, reason)
+                    self.session_process.kill()
+                    forced_kill = True
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.exception("Force kill failed for session %s", self.name)
+
         if os.name == 'nt':
             console = self._require_win32console()
             evt = console.PyINPUT_RECORDType(console.KEY_EVENT)
@@ -1130,8 +1208,17 @@ class Session(Model):
 
         if hasattr(self, "thread") and self.thread:
             LOGGER.info("Waiting for session %s thread to finish", self.name)
-            self.thread.join()
-            LOGGER.info("Session %s thread finished", self.name)
+            self.thread.join(timeout=10)
+            if self.thread.is_alive():
+                _force_kill("quit timeout")
+                self.thread.join(timeout=5)
+                if self.thread.is_alive():
+                    LOGGER.error("Session %s thread did not exit after forced kill", self.name)
+            else:
+                LOGGER.info("Session %s thread finished", self.name)
 
         self.session_status = "Aborted"
+        if forced_kill:
+            suffix = "Forced kill applied."
+            self.reason = (self.reason + " " + suffix).strip() if self.reason else suffix
         self.save()

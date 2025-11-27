@@ -2,6 +2,7 @@ from operator import itemgetter
 
 from Utils.hashcat import Hashcat
 from Utils.hashcatAPI import HashcatAPI, HashcatAPIError
+from Utils.node_capabilities import summarize_capabilities
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
@@ -72,6 +73,12 @@ def nodes(request, error_msg=""):
 def node(request, node_name, error_msg=""):
     context = {}
     context["Section"] = "Nodes"
+    context["capabilities"] = {
+        "device_type": None,
+        "profile": "unknown",
+        "short_label": "unknown",
+        "full_label": "Unknown device",
+    }
 
     if len(error_msg) != 0:
         context["error_message"] = error_msg
@@ -174,6 +181,7 @@ def node(request, node_name, error_msg=""):
     context["mask_list"] = mask_list
     context["wordlist_list"] = wordlist_list
     context["hash_type_list"] = hash_type_list
+    context["capabilities"] = summarize_capabilities(node_data)
 
     template = loader.get_template('Nodes/node.html')
     return HttpResponse(template.render(context, request))

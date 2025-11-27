@@ -157,6 +157,9 @@ def _build_settings() -> NodeSettings:
 
     brain_enabled = "true" if _bool_env("HASHCATNODE_BRAIN_ENABLED", False) else "false"
     brain_host = (_env("HASHCATNODE_BRAIN_HOST", _env("HASHCAT_BRAIN_HOST", "")) or "").strip()
+    # If a default Docker-only hostname is set, ignore it to allow auto-detection.
+    if brain_host.lower() in {"brain"}:
+        brain_host = ""
     brain_port = _env("HASHCATNODE_BRAIN_PORT", _env("HASHCAT_BRAIN_PORT", "13743"))
     brain_password = _env("HASHCATNODE_BRAIN_PASSWORD", _env("HASHCAT_BRAIN_PASSWORD", ""))
 

@@ -7,6 +7,7 @@ import os.path
 import random
 import string
 from collections import OrderedDict
+from html import escape
 
 import humanize
 from django.contrib.auth.decorators import login_required
@@ -372,6 +373,13 @@ def api_hashfile_sessions(request):
     data = []
     primary_clusters = set()
 
+    def _status_with_reason(label: str, reason: str) -> str:
+        if not reason:
+            return label
+        safe_reason = escape(str(reason))
+        safe_label = escape(str(label))
+        return f'{safe_label} - <span class="text-xs text-amber-300" title="{safe_reason}">{safe_reason}</span>'
+
     for session in Session.objects.filter(hashfile_id=hashfile_id).select_related("node", "hashfile"):
         node = session.node
         hashfile = session.hashfile
@@ -392,7 +400,8 @@ def api_hashfile_sessions(request):
         if cached is None:
             node_cached = node_snapshots.get(str(node.id)) if snapshot else None
             offline = node_cached and node_cached.get("status") == "Error"
-            status_label = "Node not accessible" if offline else "Node data unavailable"
+            reason = node_cached.get("error") if node_cached else ""
+            status_label = _status_with_reason("Node not accessible" if offline else "Node data unavailable", reason)
             data.append({
                 "node": node_label,
                 "type": "",
@@ -414,7 +423,7 @@ def api_hashfile_sessions(request):
                 buttons = ""
             else:
                 buttons = _render_session_buttons("Error", session.name)
-            status_label = "Inexistant"
+            status_label = _status_with_reason("Error", cached.get("reason") or cached.get("error") or "")
             crack_type = ""
             rule_mask = ""
             wordlist = ""
@@ -442,9 +451,9 @@ def api_hashfile_sessions(request):
                 wordlist = ""
 
             status_label = status_value
-            if status_label == "Error" and cached.get("reason"):
-                status_label += ' <a href="#" data-toggle="tooltip" data-placement="right" title="%s"><span class="glyphicon glyphicon-info-sign" aria-hidden="true"></span></a>' % cached.get(
-                    "reason")
+            reason = cached.get("reason") or cached.get("error")
+            if reason:
+                status_label = _status_with_reason(status_label, reason)
 
             remaining = cached.get("time_estimated") or ""
             progress_value = cached.get("progress")
@@ -663,9 +672,23 @@ def api_session_action(request):
 
     node = session.node
 
+    # Use cached snapshot to avoid restarting an already running session
+    cache, snapshot, _ = _get_cache_and_snapshot()
+    session_snapshots = _session_snapshots(snapshot)
+    cached_status = (session_snapshots.get(session.name) or {}).get("status")
+    def _can_start(status: str | None) -> bool:
+        return status in (None, "", "Not started", "Aborted", "Error", "Done")
+
     try:
         hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
-        res = hashcat_api.action(session.name, params["action"])
+        action = params["action"]
+        if action == "start" and not _can_start(cached_status):
+            return HttpResponse(
+                json.dumps({"response": "error", "message": f"Session {session.name} is already {cached_status}"}),
+                content_type="application/json",
+                status=400,
+            )
+        res = hashcat_api.action(session.name, action)
     except HashcatAPIError as exc:
         return HttpResponse(
             json.dumps({"response": "error", "message": str(exc)}),
@@ -673,7 +696,7 @@ def api_session_action(request):
             status=502,
         )
 
-    if params["action"] == "remove":
+    if action == "remove":
         session.delete()
 
     return HttpResponse(json.dumps(res), content_type="application/json")
@@ -711,10 +734,20 @@ def api_cluster_action(request):
 
     errors = []
 
+    cache, snapshot, _ = _get_cache_and_snapshot()
+    session_snapshots = _session_snapshots(snapshot)
+
+    def _can_start(status: str | None) -> bool:
+        return status in (None, "", "Not started", "Aborted", "Error", "Done")
+
     for s in sessions:
         node = s.node
         try:
             hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+            cached_status = (session_snapshots.get(s.name) or {}).get("status")
+            if action == "start" and not _can_start(cached_status):
+                errors.append(f"{s.name}: already {cached_status}")
+                continue
             hashcat_api.action(s.name, action)
         except HashcatAPIError as exc:
             errors.append(f"{s.name}@{node.name}: {exc}")
@@ -955,6 +988,7 @@ def _render_session_buttons(status: str, session_name: str) -> str:
     def btn(label, action, style):
         return (
             f"<button type='button' class='px-2 py-1 text-xs rounded {style}' "
+            f"data-session='{session_name}' data-action='{action}' "
             f"onClick='session_action(\"{session_name}\", \"{action}\")'>{label}</button>"
         )
 
@@ -979,6 +1013,7 @@ def _render_cluster_buttons(status: str, cluster_id: str) -> str:
     def btn(label, action, style):
         return (
             f"<button type='button' class='px-2 py-1 text-xs rounded {style}' "
+            f"data-cluster='{cluster_id}' data-action='{action}' "
             f"onClick='cluster_action(\"{cluster_id}\", \"{action}\")'>{label}</button>"
         )
 

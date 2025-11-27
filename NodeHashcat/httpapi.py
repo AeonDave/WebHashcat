@@ -72,9 +72,9 @@ class Server:
         if not enabled:
             return
 
-        current_host = str(brain_cfg.get("host", "") or "").strip()
-        if current_host:
-            # Respect an explicit host (from env or previous detection).
+        current_host = str(brain_cfg.get("host", "") or "").strip().lower()
+        if current_host and current_host not in {"webhashcat-brain", "brain"}:
+            # Respect an explicit host (from env or previous detection) unless it's a docker-only placeholder.
             return
 
         hinted_host = str(request.headers.get("X-Hashcat-Brain-Host", "") or "").strip()
@@ -149,6 +149,10 @@ class Server:
             wordlists = Hashcat.wordlists
             sessions = []
             for session in Hashcat.sessions.values():
+                try:
+                    session.refresh_status()
+                except Exception:
+                    LOGGER.exception("Failed to refresh status for session %s", getattr(session, "name", "?"))
                 sessions.append({
                     "name": session.name,
                     "status": session.session_status,

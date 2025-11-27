@@ -66,6 +66,77 @@ document.addEventListener('DOMContentLoaded', () => {
   hashfileTable.on('xhr.dt', function (e, settings, json) {
     updateCacheHint('#hashfile_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
   });
+  hashfileTable.on('draw.dt', refreshPendingButtons);
+
+  const messageBox = $('#messages');
+  function pushMessage(type, content) {
+    if (!content) return;
+    const cls = type === 'error'
+      ? 'border-red-700 bg-red-900/40 text-red-200'
+      : 'border-emerald-700 bg-emerald-900/40 text-emerald-100';
+    const el = $(`<div class="mb-2 px-3 py-2 rounded border ${cls}">${content}</div>`);
+    messageBox.append(el).show();
+    setTimeout(() => {
+      el.fadeOut(300, () => {
+        el.remove();
+        if (!messageBox.children().length) messageBox.hide();
+      });
+    }, 6000);
+  }
+
+  const PENDING_TIMEOUT_MS = 60000;
+  const pendingSessions = {};
+  const pendingClusters = {};
+  let actionInFlight = false;
+  function setActionButtonsDisabled(disabled) {
+    const selectors = [
+      'button[onclick*="session_action"]',
+      'button[onclick*="cluster_action"]',
+    ];
+    selectors.forEach(sel => {
+      const $buttons = $(sel);
+      $buttons.prop('disabled', disabled);
+      $buttons.toggleClass('opacity-50 cursor-not-allowed', disabled);
+    });
+  }
+  function refreshPendingButtons() {
+    const now = Date.now();
+    const prune = (store) => {
+      Object.keys(store).forEach(key => {
+        if (now - store[key] > PENDING_TIMEOUT_MS) delete store[key];
+      });
+    };
+    prune(pendingSessions);
+    prune(pendingClusters);
+
+    Object.keys(pendingSessions).forEach(name => {
+      $(`button[data-session="${name}"]`).prop('disabled', true).addClass('opacity-50 cursor-not-allowed');
+    });
+    Object.keys(pendingClusters).forEach(id => {
+      $(`button[data-cluster="${id}"]`).prop('disabled', true).addClass('opacity-50 cursor-not-allowed');
+    });
+
+    // Auto-release pending flags if the UI shows sessions/clusters no longer in "Not started".
+    $('button[data-session]').each(function () {
+      const sess = $(this).data('session');
+      if (!sess) return;
+      const statusText = $(this).closest('tr').find('td').eq(4).text().trim().toLowerCase(); // assumes status column index 4
+      if (statusText && statusText !== "not started") {
+        delete pendingSessions[sess];
+        $(this).prop('disabled', false).removeClass('opacity-50 cursor-not-allowed');
+      }
+    });
+    $('button[data-cluster]').each(function () {
+      const clus = $(this).data('cluster');
+      if (!clus) return;
+      const row = $(this).closest('tr');
+      const statusText = row.find('td').eq(4).text().trim().toLowerCase();
+      if (statusText && statusText !== "not started") {
+        delete pendingClusters[clus];
+        $(this).prop('disabled', false).removeClass('opacity-50 cursor-not-allowed');
+      }
+    });
+  }
 
   function renderProgress(value) {
     const pct = parseFloat(value) || 0;
@@ -103,9 +174,11 @@ document.addEventListener('DOMContentLoaded', () => {
         { title: "Speed", data: "speed" },
         { title: "", data: "buttons", orderable: false },
       ],
-    }).on('xhr.dt', function (e, settings, json) {
-      updateCacheHint('#hashfile_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
-    });
+    })
+      .on('xhr.dt', function (e, settings, json) {
+        updateCacheHint('#hashfile_cache_hint', json && json.cache ? json.cache : null, 'Session cache');
+      })
+      .on('draw.dt', refreshPendingButtons);
   }
 
   function format(table_id) {
@@ -129,6 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
       opened.push(vtask_id);
       sub_DataTable(vtask_id, subtable_id);
     }
+    refreshPendingButtons();
   });
 
   function reload_hashfile_table() {
@@ -139,6 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
         row.child(format(subtable_id)).show();
         sub_DataTable(vtask_id, subtable_id);
       });
+      refreshPendingButtons();
     });
   }
 
@@ -147,21 +222,61 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function session_action(session_name, action) {
+    if (actionInFlight) return;
     if (action === "remove" && !window.confirm("Are you sure?")) return;
+    actionInFlight = true;
+    setActionButtonsDisabled(true);
+    pendingSessions[session_name] = Date.now();
     $.ajax({
       url: cfg.sessionActionUrl,
       type: 'GET',
       data: { session_name: session_name, action: action },
-      success: function () { reload_hashfile_table(); }
+      dataType: 'json',
+      success: function (res) {
+        if (res && res.response === "error") {
+          pushMessage('error', res.message || 'Node rejected command');
+        } else {
+          pushMessage('info', `Command "${action}" sent for ${session_name}`);
+        }
+        reload_hashfile_table();
+      },
+      error: function (xhr) {
+        pushMessage('error', xhr.responseText || `Command "${action}" failed for ${session_name}`);
+      },
+      complete: function () {
+        actionInFlight = false;
+        setActionButtonsDisabled(false);
+        refreshPendingButtons();
+      }
     });
   }
   function cluster_action(cluster_id, action) {
+    if (actionInFlight) return;
     if (action === "remove" && !window.confirm("Are you sure you want to remove all sessions in this cluster?")) return;
+    actionInFlight = true;
+    setActionButtonsDisabled(true);
+    pendingClusters[cluster_id] = Date.now();
     $.ajax({
       url: cfg.clusterActionUrl,
       type: 'GET',
       data: { cluster: cluster_id, action: action },
-      success: function () { reload_hashfile_table(); }
+      dataType: 'json',
+      success: function (res) {
+        if (res && res.response === "partial_error") {
+          pushMessage('error', res.message || 'Some nodes did not accept the command');
+        } else {
+          pushMessage('info', `Command "${action}" sent to cluster ${cluster_id}`);
+        }
+        reload_hashfile_table();
+      },
+      error: function (xhr) {
+        pushMessage('error', xhr.responseText || `Command "${action}" failed for cluster ${cluster_id}`);
+      },
+      complete: function () {
+        actionInFlight = false;
+        setActionButtonsDisabled(false);
+        refreshPendingButtons();
+      }
     });
   }
   function hashfile_action(hashfile_id, action) {
@@ -194,18 +309,6 @@ document.addEventListener('DOMContentLoaded', () => {
   update_messages();
   setInterval(update_messages, 15000);
 
-  function deviceTypeLabel(value) {
-     if (value === 2) return "GPU (from node)";
-     if (value === 3) return "FPGA/DSP/Co-processor (from node)";
-     return "CPU (from node)";
-  }
-  function updateDeviceDisplay(selectSelector, labelSelector, inputSelector) {
-     const nodeName = $(selectSelector).val();
-     const dtype = (cfg.nodeDeviceMap || {})[nodeName] || 1;
-     $(labelSelector).text(deviceTypeLabel(dtype));
-     $(inputSelector).val(dtype);
-  }
-
   $('#action_new').on('show.flowbite.modal', function (event) {
     const button = event.relatedTarget;
     const hashfile_name = button?.getAttribute('data-hashfile') || '';
@@ -213,11 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
       $('#session_modal_title').text(`${hashfile_name}: New session`);
       $('#hashfile_id_dict').val(hashfile_id);
       $('#hashfile_id_mask').val(hashfile_id);
-      updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict');
-      updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask');
     });
-  $('#node_dict').on('change', () => updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict'));
-  $('#node_mask').on('change', () => updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask'));
   function openSessionModal(btn) {
     const hashfile_name = $(btn).data('hashfile') || '';
     const hashfile_id = $(btn).data('hashfile_id') || '';
@@ -229,8 +328,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (hash_type_id !== undefined && hash_type_id !== null && hash_type_id !== '') {
       $('#hash_type_dict').val(String(hash_type_id));
     }
-    updateDeviceDisplay('#node_dict', '#device_type_label_dict', '#device_type_input_dict');
-    updateDeviceDisplay('#node_mask', '#device_type_label_mask', '#device_type_input_mask');
     showModal('action_new');
   }
 

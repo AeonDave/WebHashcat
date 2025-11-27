@@ -65,12 +65,15 @@ services:
 
   brain:
     image: dizcza/docker-hashcat:pocl
-    container_name: webhashcat-brain
-    # Use a shell so the password is read from the container env (env_file) without compose-time substitution
+    env_file:
+      - ../.env
     command:
       - /bin/sh
       - -c
-      - "/usr/local/bin/hashcat --brain-server --brain-host 0.0.0.0 --brain-port 13743 --brain-password \"$${HASHCAT_BRAIN_PASSWORD}\""
+      - |
+        set -e
+        echo "[brain] starting hashcat brain server on 0.0.0.0:13743"
+        exec /usr/local/bin/hashcat --brain-server --brain-host 0.0.0.0 --brain-port 13743 --brain-password "$${HASHCAT_BRAIN_PASSWORD}" 2>&1
     restart: unless-stopped
     networks:
       - webhashcat
