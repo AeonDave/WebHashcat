@@ -343,6 +343,8 @@ class Server:
                 int(data["end_timestamp"]) if data["end_timestamp"] != None else None,
                 data["hashcat_debug_file"],
                 str(data.get("kernel_optimized", "")).lower() in {"true", "1", "on", "yes"},
+                int(data.get("skip")) if data.get("skip") not in [None, ""] else None,
+                int(data.get("limit")) if data.get("limit") not in [None, ""] else None,
             )
 
             res = {"response": "ok"}

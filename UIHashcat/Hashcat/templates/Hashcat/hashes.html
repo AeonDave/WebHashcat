@@ -106,6 +106,7 @@
                 <option value="{{ node.name }}">{{ node.label }}</option>
                 {% endfor %}
                 <option value="__brain_cluster__">Brain cluster (all Brain-enabled nodes)</option>
+                <option value="__distributed_split__">Distributed split (all Brain-enabled nodes, no Brain)</option>
               </select>
               <p class="text-xs text-gray-400 mt-1">
                 Il tipo di nodo e' indicato tra parentesi. Se scegli "Brain cluster" verranno create piu' sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).
@@ -164,6 +165,7 @@
                 <option value="{{ node.name }}">{{ node.label }}</option>
                 {% endfor %}
                 <option value="__brain_cluster__">Brain cluster (all Brain-enabled nodes)</option>
+                <option value="__distributed_split__">Distributed split (all Brain-enabled nodes, no Brain)</option>
               </select>
               <p class="text-xs text-gray-400 mt-1">
                 Il tipo di nodo e' indicato tra parentesi. Se scegli "Brain cluster" verranno create piu' sessioni, una per ogni nodo con Brain attivo, che lavoreranno in cluster (Brain mode 3).

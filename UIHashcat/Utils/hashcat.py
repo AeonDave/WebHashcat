@@ -725,14 +725,6 @@ class Hashcat(object):
     @classmethod
     def _count_wordlist_lines(cls, path: str) -> Optional[int]:
         try:
-            # Prefer hashcat --keyspace: handles compressed archives transparently
-            try:
-                result = cls.run_hashcat([cls.get_binary(), "--keyspace", path], capture_output=True, text=True, check=True)
-                if result.stdout:
-                    return int(result.stdout.strip())
-            except Exception:
-                LOGGER.debug("hashcat --keyspace failed for %s, falling back to manual count", path, exc_info=True)
-
             if path.endswith(".gz"):
                 import gzip
                 with gzip.open(path, "rt", errors="backslashreplace") as fh:
@@ -747,7 +739,7 @@ class Hashcat(object):
                             return sum(1 for _ in io.TextIOWrapper(fh, errors="backslashreplace"))
                     return None
             if path.endswith(".7z"):
-                return None  # without py7zr we cannot stream safely; keyspace should have covered it
+                return None  # without py7zr we cannot stream safely
             return sum(1 for _ in open(path, errors="backslashreplace"))
         except Exception:
             LOGGER.warning("Failed to count wordlist lines for %s", path, exc_info=True)

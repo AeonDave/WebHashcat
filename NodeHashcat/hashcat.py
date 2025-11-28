@@ -38,9 +38,11 @@ from peewee import (
     DateTimeField,
     FloatField,
     IntegerField,
+    BigIntegerField,
     Model,
     SqliteDatabase,
     TextField,
+    OperationalError,
 )
 
 DB_PATH = os.environ.get("HASHCATNODE_DB_PATH", os.path.dirname(os.path.abspath(__file__)) + os.sep + "hashcatnode.db")
@@ -339,7 +341,8 @@ class Hashcat(object):
 
     @classmethod
     def create_session(self, name, crack_type, hash_file, hash_mode_id, wordlist, rule, mask, username_included,
-                       device_type, brain_mode, end_timestamp, hashcat_debug_file, kernel_optimized: bool = False):
+                       device_type, brain_mode, end_timestamp, hashcat_debug_file, kernel_optimized: bool = False,
+                       skip: Optional[int] = None, limit: Optional[int] = None):
 
         if name in self.sessions:
             raise Exception("This session name has already been used")
@@ -413,6 +416,8 @@ class Hashcat(object):
             brain_mode=brain_mode,
             end_timestamp=end_timestamp,
             output_file=output_file,
+            skip=skip,
+            limit=limit,
             session_status="Not started",
             time_started=None,
             progress=0,
@@ -451,6 +456,15 @@ class Hashcat(object):
 
     @classmethod
     def reload_sessions(self):
+        # Ensure new columns exist even on existing DBs.
+        try:
+            database.execute_sql("ALTER TABLE session ADD COLUMN skip INTEGER")
+        except OperationalError:
+            pass
+        try:
+            database.execute_sql("ALTER TABLE session ADD COLUMN limit INTEGER")
+        except OperationalError:
+            pass
 
         for session in Session.select():
             if session.session_status in ["Running", "Paused"]:
@@ -656,6 +670,8 @@ class Session(Model):
     brain_mode = IntegerField()
     end_timestamp = IntegerField(null=True)
     output_file = CharField(null=True)
+    skip = BigIntegerField(null=True)
+    limit = BigIntegerField(null=True)
     session_status = CharField()
     time_started = DateTimeField(null=True)
     progress = FloatField()
@@ -783,6 +799,11 @@ class Session(Model):
                 cmd_line += ['--brain-host', brain_host]
                 cmd_line += ['--brain-port', brain_cfg.get('port', Hashcat.brain.get('port'))]
                 cmd_line += ['--brain-password', brain_cfg.get('password', Hashcat.brain.get('password'))]
+
+            if self.skip:
+                cmd_line += ['--skip', str(self.skip)]
+            if self.limit:
+                cmd_line += ['--limit', str(self.limit)]
 
             cmd_line = [str(item) for item in cmd_line]
             flattened_cmd = " ".join(cmd_line)

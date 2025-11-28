@@ -8,7 +8,7 @@ from operator import itemgetter
 
 import humanize
 from Nodes.models import Node
-from Utils.hashcat import Hashcat
+from Utils.hashcat import Hashcat, HashcatExecutionError
 from Utils.hashcatAPI import HashcatAPI, HashcatAPIError
 from Utils.hashcat_cache import HashcatSnapshotCache
 from Utils.node_capabilities import summarize_capabilities
@@ -16,6 +16,7 @@ from Utils.session_snapshot import SessionSnapshot
 from Utils.tasks import import_hashfile_task, run_search_task
 from Utils.utils import Echo
 from Utils.utils import init_hashfile_locks
+from Utils.hashcat import HashcatExecutionError
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
@@ -330,8 +331,76 @@ def new_session(request):
                 return 2
             return 3
 
+        def _resolve_asset_path(items, name):
+            for itm in items:
+                if itm.get("name") == name:
+                    return itm.get("path")
+            return None
+
+        def _line_count(items, name):
+            for itm in items:
+                if itm.get("name") == name:
+                    return itm.get("line_count")
+            return None
+
+        def _compute_keyspace_dictionary_meta(wl_name, rules_list, wl_meta, rule_meta):
+            wl_count = _line_count(wl_meta, wl_name)
+            if wl_count is None:
+                wl_path = _resolve_asset_path(wl_meta, wl_name)
+                if wl_path and os.path.exists(wl_path):
+                    try:
+                        with open(wl_path, errors="backslashreplace") as fh:
+                            wl_count = sum(1 for _ in fh)
+                    except Exception:
+                        wl_count = None
+            if wl_count is None:
+                return None
+            # Le rules non influiscono sullo split: vengono applicate dopo la distribuzione del dizionario.
+            return wl_count
+
+        def _node_weight(capabilities: dict) -> int:
+            dtype = capabilities.get("device_type")
+            if dtype == 2:
+                return 4  # GPU peso maggiore
+            if dtype == 3:
+                return 3
+            return 1  # CPU default
+
+        def _compute_keyspace_mask(mask_name, mask_meta, hash_type_id):
+            # Per distribuzione semplice, dividiamo il file di mask per numero di righe (commenti esclusi).
+            mask_path = _resolve_asset_path(mask_meta, mask_name)
+            if not mask_path or not os.path.exists(mask_path):
+                return None
+            # Calcola il keyspace reale per ciascuna mask (base loop) usando hashcat --keyspace.
+            total = 0
+            bin_path = Hashcat.get_binary()
+            try:
+                with open(mask_path, encoding="utf-8", errors="backslashreplace") as fh:
+                    for line in fh:
+                        mask_line = line.strip()
+                        if not mask_line or mask_line.startswith("#"):
+                            continue
+                        cmd = [bin_path, "--keyspace", "-a", "3"]
+                        if hash_type_id is not None and hash_type_id != -1:
+                            cmd += ["-m", str(hash_type_id)]
+                        cmd.append(mask_line)
+                        res = Hashcat.run_hashcat(cmd)
+                        if res.stdout:
+                            total += int(res.stdout.strip())
+            except HashcatExecutionError:
+                total = 0
+            except Exception:
+                total = 0
+            if total <= 0:
+                try:
+                    with open(mask_path, encoding="utf-8", errors="backslashreplace") as fh:
+                        total = sum(1 for line in fh if line.strip() and not line.lstrip().startswith("#"))
+                except Exception:
+                    return None
+            return total if total > 0 else None
+
         # Modalità standard: un singolo nodo, nessun Brain esplicito dalla UI.
-        if node_name != "__brain_cluster__":
+        if node_name not in ("__brain_cluster__", "__distributed_split__"):
             node = get_object_or_404(Node, name=node_name)
             session_name = base_id
             brain_mode = 0  # Brain disabilitato quando si sceglie un singolo nodo
@@ -395,7 +464,7 @@ def new_session(request):
             messages.success(request, "Session successfully created")
 
         # Modalità Brain cluster: crea una sessione per ogni nodo con Brain attivo.
-        else:
+        elif node_name == "__brain_cluster__":
             brain_mode = _brain_mode_for_hash(hashfile.hash_type)
             created = 0
             errors = []
@@ -484,6 +553,106 @@ def new_session(request):
                 messages.warning(request, f"Brain cluster created on {created} node(s); some nodes were skipped: " + "; ".join(errors[:3]))
             else:
                 messages.success(request, f"Brain cluster created on {created} node(s)")
+
+        # Modalità distributed split: divide il keyspace tra i nodi con Brain attivo (senza usare Brain client).
+        else:
+            nodes = []
+            wordlists_meta = Hashcat.get_wordlists(detailed=True)
+            rules_meta = Hashcat.get_rules(detailed=True)
+            masks_meta = Hashcat.get_masks(detailed=True)
+            for node in Node.objects.all():
+                try:
+                    api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+                    info = api.get_hashcat_info()
+                except HashcatAPIError:
+                    continue
+                if info and info.get("brain_enabled"):
+                    nodes.append((node, info))
+            if not nodes:
+                messages.error(request, "No Brain-enabled nodes available for distributed split.")
+                return redirect('Hashcat:hashfiles')
+            if crack_type == "dictionary":
+                keyspace = _compute_keyspace_dictionary_meta(wordlist, selected_rules or [], wordlists_meta, rules_meta)
+            else:
+                keyspace = _compute_keyspace_mask(mask, masks_meta, hashfile.hash_type)
+            if not keyspace or keyspace <= 0:
+                messages.error(request, "Unable to compute keyspace for distributed split; aborting.")
+                return redirect('Hashcat:hashfiles')
+            weighted_nodes = []
+            total_weight = 0
+            for node, info in nodes:
+                caps = summarize_capabilities(info)
+                w = _node_weight(caps)
+                if w <= 0:
+                    w = 1
+                total_weight += w
+                weighted_nodes.append((node, info, w))
+            if total_weight <= 0:
+                messages.error(request, "Unable to compute weights for split nodes.")
+                return redirect('Hashcat:hashfiles')
+            base_chunk = keyspace // total_weight
+            remainder = keyspace - (base_chunk * total_weight)
+            created = 0
+            errors = []
+            brain_mode = 0
+            skip_value = 0
+            for idx, (node, info, weight) in enumerate(weighted_nodes):
+                limit_value = base_chunk * weight
+                if idx == len(weighted_nodes) - 1:
+                    limit_value += remainder
+                session_name = f"{base_id}-{node.name}"
+                try:
+                    hashcat_api = HashcatAPI(node.hostname, node.port, node.username, node.password)
+                    if crack_type == "dictionary":
+                        res = hashcat_api.create_dictionary_session(
+                            session_name,
+                            hashfile,
+                            rule,
+                            wordlist,
+                            info.get("device_type"),
+                            brain_mode,
+                            end_timestamp,
+                            hashcat_debug_file,
+                            kernel_optimized,
+                            skip=skip_value,
+                            limit=limit_value,
+                        )
+                    else:
+                        res = hashcat_api.create_mask_session(
+                            session_name,
+                            hashfile,
+                            mask,
+                            info.get("device_type"),
+                            brain_mode,
+                            end_timestamp,
+                            hashcat_debug_file,
+                            kernel_optimized,
+                            skip=skip_value,
+                            limit=limit_value,
+                        )
+                except HashcatAPIError as exc:
+                    errors.append(f"Node {node.name} rejected split session: {exc}")
+                    continue
+                if not res or res.get("response") == "error":
+                    errors.append(res.get("message", f"Node {node.name} rejected session"))
+                    continue
+                db_session = Session(
+                    name=session_name,
+                    hashfile=hashfile,
+                    node=node,
+                    potfile_line_retrieved=0,
+                    cluster=base_id,
+                )
+                db_session.save()
+                created += 1
+                skip_value += limit_value
+            if created == 0:
+                messages.error(request, "Unable to create distributed split cluster: " + "; ".join(errors[:3]))
+                return redirect('Hashcat:hashfiles')
+            if errors:
+                messages.warning(request, f"Distributed split created on {created} node(s); some nodes were skipped: " + "; ".join(errors[:3]))
+            else:
+                messages.success(request, f"Distributed split created on {created} node(s)")
 
     return redirect('Hashcat:hashfiles')
 
