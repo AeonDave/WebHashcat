@@ -308,7 +308,7 @@ def run_search_task(search_id):
                         except KeyError:
                             pass
                         try:
-                            row[3] = hash_types_dict[int(row[3])]['name'] if int(row[3]) != -1 else "Plaintext"
+                            row[3] = hash_types_dict[int(row[3])]['name'] if int(row[3]) != -1 else "Unknown (-1)"
                         except KeyError:
                             pass
                         except ValueError:

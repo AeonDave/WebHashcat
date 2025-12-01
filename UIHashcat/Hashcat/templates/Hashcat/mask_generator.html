@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block breadcrumb %}Mask generator{% endblock %}
+{% block title %}Mask generator{% endblock %}
+
+{% block content %}
+<div class="card rounded-xl p-6">
+  <h2 class="text-xl font-semibold mb-4 text-gray-100">Generate masks with PolicyGen</h2>
+  <form method="post" class="grid grid-cols-1 md:grid-cols-2 gap-4" data-sync-form>
+    {% csrf_token %}
+    <div>
+      <label class="block text-sm mb-1">Min length</label>
+      <input type="number" name="minlength" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.minlength|default:8 }}">
+    </div>
+    <div>
+      <label class="block text-sm mb-1">Max length</label>
+      <input type="number" name="maxlength" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.maxlength|default:8 }}">
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1">Min lower</label>
+      <input type="number" name="minlower" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.minlower }}">
+    </div>
+    <div>
+      <label class="block text-sm mb-1">Max lower</label>
+      <input type="number" name="maxlower" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.maxlower }}">
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1">Min upper</label>
+      <input type="number" name="minupper" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.minupper }}">
+    </div>
+    <div>
+      <label class="block text-sm mb-1">Max upper</label>
+      <input type="number" name="maxupper" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.maxupper }}">
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1">Min digit</label>
+      <input type="number" name="mindigit" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.mindigit }}">
+    </div>
+    <div>
+      <label class="block text-sm mb-1">Max digit</label>
+      <input type="number" name="maxdigit" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.maxdigit }}">
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1">Min special</label>
+      <input type="number" name="minspecial" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.minspecial }}">
+    </div>
+    <div>
+      <label class="block text-sm mb-1">Max special</label>
+      <input type="number" name="maxspecial" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.maxspecial }}">
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1">Prefix</label>
+      <input type="text" name="prefix" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.prefix }}">
+    </div>
+    <div>
+      <label class="block text-sm mb-1">Suffix</label>
+      <input type="text" name="suffix" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.suffix }}">
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1">Fixed position (1-based)</label>
+      <input type="number" name="fixed_pos" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.fixed_pos }}">
+    </div>
+    <div>
+      <label class="block text-sm mb-1">Fixed word</label>
+      <input type="text" name="fixed_word" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.fixed_word }}">
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1">PPS (Passwords/sec)</label>
+      <input type="number" name="pps" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2"
+             value="{{ params.pps|default:1000000000 }}">
+    </div>
+    <div class="flex items-center gap-3">
+      <label class="inline-flex items-center gap-2 text-sm">
+        <input type="checkbox" name="showmasks" {% if params.showmasks|default:True %}checked{% endif %} class="accent-primary">
+        Show matching masks (verbose)
+      </label>
+      <label class="inline-flex items-center gap-2 text-sm">
+        <input type="checkbox" name="noncompliant" {% if params.noncompliant %}checked{% endif %} class="accent-primary">
+        Generate non-compliant masks
+      </label>
+    </div>
+
+    <div class="md:col-span-2 flex justify-end gap-2 mt-2">
+      <button type="submit" class="px-4 py-2 rounded bg-primary text-black font-semibold">Generate</button>
+    </div>
+  </form>
+
+  {% if error %}
+    <div class="mt-4 p-3 rounded border border-red-700 bg-red-900/30 text-red-100 text-sm">{{ error }}</div>
+  {% endif %}
+  <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm mb-1">Verbose output</label>
+      <pre class="w-full min-h-[260px] rounded border border-gray-700 bg-black/40 p-3 text-xs overflow-x-auto whitespace-pre-wrap">{{ output }}</pre>
+    </div>
+    <div>
+      <label class="block text-sm mb-1">Masks only (.hcmask ready)</label>
+      <pre class="w-full min-h-[260px] rounded border border-gray-700 bg-black/40 p-3 text-xs overflow-x-auto whitespace-pre">{{ masks_only }}</pre>
+    </div>
+  </div>
+</div>
+{% endblock %}

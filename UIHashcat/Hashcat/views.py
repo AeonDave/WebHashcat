@@ -28,6 +28,10 @@ from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.template import loader
+from Tools.policygen import PolicyGen
+import io
+import contextlib
+from pathlib import Path
 
 from .models import Hashfile, Session, Hash, Search
 
@@ -147,7 +151,6 @@ def hashfiles(request):
     if request.method == 'POST':
         if request.POST["action"] == "add":
             hash_type = int(request.POST["hash_type"])
-
             hashfile_name = ''.join(
                 random.choice(string.ascii_uppercase + string.digits) for _ in range(12)) + ".hashfile"
             hashfile_path = os.path.join(os.path.dirname(__file__), "..", "Files", "Hashfiles", hashfile_name)
@@ -178,16 +181,13 @@ def hashfiles(request):
             # Update the new file with the potfile, this may take a while, but it is processed in a background task
             import_hashfile_task.delay(hashfile.id)
 
-            if hash_type != -1:  # if != plaintext
-                messages.success(request, "Hashfile successfully added")
-            else:
-                messages.success(request, "Plaintext file successfully added")
+            messages.success(request, "Hashfile successfully added")
 
     context["node_list"] = Node.objects.all()
     context["multi_node"] = context["node_list"].count() > 1
     hash_types = _available_hash_types()
     # Autodetect in hashcat still requires choosing among suggested modes; we require explicit selection to avoid ambiguity.
-    context["hash_type_list"] = [{'id': -1, 'name': 'Plaintext'}] + hash_types
+    context["hash_type_list"] = hash_types
     context["rule_list"] = [{'name': None}] + sorted(Hashcat.get_rules(detailed=False), key=itemgetter('name'))
     context["mask_list"] = sorted(Hashcat.get_masks(detailed=False), key=itemgetter('name'))
     context["wordlist_list"] = sorted(Hashcat.get_wordlists(detailed=False), key=itemgetter('name'))
@@ -668,6 +668,106 @@ def upload_rule(request):
 
 
 @login_required
+def mask_generator(request):
+    context = {"Section": "MaskGenerator"}
+    output = ""
+    masks_only = ""
+    masks_with_comments = ""
+    error = ""
+    params = {
+        "minlength": 8,
+        "maxlength": 8,
+        "pps": 1_000_000_000,
+        "showmasks": True,
+        "noncompliant": False,
+    }
+    if request.method == "POST":
+        # Collect parameters
+        def _get_int(name):
+            val = request.POST.get(name)
+            if val is None or val == "":
+                return None
+            try:
+                return int(val)
+            except ValueError:
+                return None
+
+        params = {
+            "minlength": _get_int("minlength") or 8,
+            "maxlength": _get_int("maxlength") or 8,
+            "mindigit": _get_int("mindigit"),
+            "minlower": _get_int("minlower"),
+            "minupper": _get_int("minupper"),
+            "minspecial": _get_int("minspecial"),
+            "maxdigit": _get_int("maxdigit"),
+            "maxlower": _get_int("maxlower"),
+            "maxupper": _get_int("maxupper"),
+            "maxspecial": _get_int("maxspecial"),
+            "pps": _get_int("pps") or 1_000_000_000,
+            "prefix": request.POST.get("prefix", ""),
+            "suffix": request.POST.get("suffix", ""),
+            "fixed_pos": _get_int("fixed_pos"),
+            "fixed_word": request.POST.get("fixed_word", ""),
+            "noncompliant": request.POST.get("noncompliant") == "on",
+            # Forza showmasks a True se non esplicitato, cos� vediamo sempre le maschere generate
+            "showmasks": request.POST.get("showmasks") == "on" if "showmasks" in request.POST else True,
+        }
+        try:
+            pg = PolicyGen()
+            pg.minlength = params["minlength"]
+            pg.maxlength = params["maxlength"]
+            pg.mindigit = params["mindigit"]
+            pg.minlower = params["minlower"]
+            pg.minupper = params["minupper"]
+            pg.minspecial = params["minspecial"]
+            pg.maxdigit = params["maxdigit"]
+            pg.maxlower = params["maxlower"]
+            pg.maxupper = params["maxupper"]
+            pg.maxspecial = params["maxspecial"]
+            pg.pps = params["pps"]
+            pg.prefix = params["prefix"] or ""
+            pg.suffix = params["suffix"] or ""
+            if params["fixed_pos"] and params["fixed_word"]:
+                pg.fixed_pos = params["fixed_pos"]
+                pg.fixed_word = params["fixed_word"]
+            pg.showmasks = True if params.get("showmasks") is None else params["showmasks"]
+
+            buf = io.StringIO()
+            masks_buf = io.StringIO()
+            pg.output_file = masks_buf
+            with contextlib.redirect_stdout(buf):
+                pg.generate_masks(params["noncompliant"])
+            output = buf.getvalue()
+            masks_only = masks_buf.getvalue()
+            if output or masks_only:
+                comment_lines = ["# " + ln for ln in output.splitlines() if ln.strip()]
+                masks_with_comments = "\n".join(comment_lines + masks_only.splitlines())
+        except Exception as exc:
+            error = f"Error while generating masks: {exc}"
+    context["output"] = output
+    context["masks_only"] = masks_only
+    context["masks_with_comments"] = masks_with_comments
+    context["error"] = error
+    context["params"] = params
+    template = loader.get_template('Hashcat/mask_generator.html')
+    return HttpResponse(template.render(context, request))
+
+
+@login_required
+def guide(request):
+    context = {"Section": "Guide"}
+    guide_path = Path(__file__).resolve().parent.parent / "guide.md"
+    guide_md = ""
+    try:
+        guide_md = guide_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        guide_md = ""
+    context["guide_md"] = guide_md
+    template = loader.get_template('Hashcat/guide.html')
+    return HttpResponse(template.render(context, request))
+
+
+@login_required
 @staff_member_required
 def upload_mask(request):
     if request.method == 'POST':
@@ -727,8 +827,7 @@ def hashfile(request, hashfile_id, error_msg=''):
     context['lines'] = humanize.intcomma(hashfile.line_count)
     context['recovered'] = "%s (%.2f%%)" % (humanize.intcomma(hashfile.cracked_count),
                                             hashfile.cracked_count / hashfile.line_count * 100) if hashfile.line_count != 0 else "0"
-    context['hash_type'] = "Plaintext" if hashfile.hash_type == -1 else Hashcat.get_hash_types()[hashfile.hash_type][
-        "name"]
+    context['hash_type'] = Hashcat.get_hash_types().get(hashfile.hash_type, {}).get("name", f"Unknown ({hashfile.hash_type})")
 
     template = loader.get_template('Hashcat/hashfile.html')
     return HttpResponse(template.render(context, request))

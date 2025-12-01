@@ -64,6 +64,8 @@
       <a href="{% url 'Hashcat:files' %}" class="nav-link {% if Section == 'Files' %}active{% endif %}">Files</a>
       <a href="{% url 'Hashcat:search' %}" class="nav-link {% if Section == 'Search' %}active{% endif %}">Search</a>
       <a href="{% url 'Nodes:nodes' %}" class="nav-link {% if Section == 'Nodes' %}active{% endif %}">Nodes</a>
+      <a href="{% url 'Hashcat:mask_generator' %}" class="nav-link {% if Section == 'MaskGenerator' %}active{% endif %}">Mask generator</a>
+      <a href="{% url 'Hashcat:guide' %}" class="nav-link {% if Section == 'Guide' %}active{% endif %}">Guide</a>
     </nav>
     {% if user.is_authenticated %}
     <div class="px-4 py-4 text-sm text-gray-400">Connected: {{ user.username }} | <a class="text-primary hover:underline" href="{% url 'Auth:logout' %}">Logout</a></div>

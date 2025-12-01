@@ -50,8 +50,8 @@
             <select class="hidden" id="hash_type" name="hash_type">
               {% for hash_type in hash_type_list %}
               <option value="{{ hash_type.id }}">{{ hash_type.name }} ({{ hash_type.id }})</option>
-                {% endfor %}
-              </select>
+              {% endfor %}
+            </select>
           </div>
         </div>
         <div>
@@ -119,11 +119,15 @@
               </p>
             </label>
             <label class="block text-sm">Hash type
-              <select id="hash_type_dict" name="hash_type" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
-                {% for hash_type in hash_type_list %}
-                <option value="{{ hash_type.id }}">{{ hash_type.name }} ({{ hash_type.id }})</option>
-                {% endfor %}
-              </select>
+              <div class="relative mt-1">
+                <input type="text" id="hash_type_dict_filter" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 text-sm" placeholder="Search by name or ID...">
+                <div id="hash_type_dict_dropdown" class="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded border border-gray-700 bg-[#0b1220] shadow-lg hidden"></div>
+                <select id="hash_type_dict" name="hash_type" class="hidden">
+                  {% for hash_type in hash_type_list %}
+                  <option value="{{ hash_type.id }}">{{ hash_type.name }} ({{ hash_type.id }})</option>
+                  {% endfor %}
+                </select>
+              </div>
             </label>
             <label class="block text-sm">Rule(s)
               <select name="rule" multiple class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block breadcrumb %}Guide{% endblock %}
+{% block title %}Guide{% endblock %}
+
+{% block content %}
+<div class="card rounded-xl p-6 max-w-5xl mx-auto">
+  <div id="guide-content" class="md-render rounded-lg p-4 bg-[#0b1220] border border-gray-800 overflow-x-auto">
+    <p class="text-gray-400 text-sm">Rendering markdown...</p>
+  </div>
+</div>
+<style>
+  /* Minimal markdown styling */
+  .md-render h1 { font-size: 1.8rem; margin: 1.2rem 0 0.6rem; font-weight: 700; color: #e5e7eb; }
+  .md-render h2 { font-size: 1.4rem; margin: 1rem 0 0.5rem; font-weight: 700; color: #e5e7eb; }
+  .md-render h3 { font-size: 1.2rem; margin: 0.9rem 0 0.4rem; font-weight: 600; color: #e5e7eb; }
+  .md-render p { margin: 0.5rem 0; color: #cbd5e1; line-height: 1.6; }
+  .md-render ul { margin: 0.5rem 0 0.5rem 1.3rem; list-style: disc; color: #cbd5e1; }
+  .md-render ol { margin: 0.5rem 0 0.5rem 1.3rem; list-style: decimal; color: #cbd5e1; }
+  .md-render code { background: #111827; color: #fbbf24; padding: 0.15rem 0.35rem; border-radius: 4px; }
+  .md-render pre { background: #0f172a; color: #e5e7eb; padding: 0.75rem; border-radius: 8px; border: 1px solid #1f2937; overflow-x: auto; }
+  .md-render a { color: #22d3ee; text-decoration: underline; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const md = `{{ guide_md|escapejs }}`;
+    const target = document.getElementById('guide-content');
+    if (!target) return;
+    if (md && window.marked && typeof window.marked.parse === 'function') {
+      window.marked.setOptions({ breaks: true, gfm: true });
+      target.innerHTML = window.marked.parse(md);
+    } else {
+      const fallback = `{{ guide_html|safe|escapejs }}`;
+      target.innerHTML = fallback || '<p class="text-red-400">guide.md not found.</p>';
+    }
+  });
+</script>
+{% endblock %}

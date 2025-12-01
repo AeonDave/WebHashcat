@@ -328,7 +328,15 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#hashfile_id_mask').val(hashfile_id);
     // Accetta anche mode 0 (MD5), quindi non usare un semplice controllo di truthiness
     if (hash_type_id !== undefined && hash_type_id !== null && hash_type_id !== '') {
-      $('#hash_type_dict').val(String(hash_type_id));
+      const sel = document.getElementById('hash_type_dict');
+      const filterInput = document.getElementById('hash_type_dict_filter');
+      if (sel) {
+        sel.value = String(hash_type_id);
+        if (filterInput) {
+          const opt = sel.selectedOptions[0];
+          filterInput.value = opt ? opt.text : '';
+        }
+      }
     }
     showModal('action_new');
   }
@@ -342,7 +350,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => showModal('action_add'));
   });
   // Filtered dropdown for "New hashfile" hash type selection (single combined control)
-  function initFilterDropdown(selectId, inputId, listId) {
+  function initFilterDropdown(selectId, inputId, listId, showSelected = false) {
     const selectEl = document.getElementById(selectId);
     const inputEl = document.getElementById(inputId);
     const listEl = document.getElementById(listId);
@@ -392,9 +400,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Start with empty search field; selection remains whatever default was set in markup.
+    // Optionally show the current selection as text
+    if (showSelected && selectEl.selectedOptions.length) {
+      inputEl.value = selectEl.selectedOptions[0].text;
+    }
   }
-  initFilterDropdown('hash_type', 'hash_type_filter', 'hash_type_dropdown');
+  initFilterDropdown('hash_type', 'hash_type_filter', 'hash_type_dropdown', false);
+  initFilterDropdown('hash_type_dict', 'hash_type_dict_filter', 'hash_type_dict_dropdown', true);
   // Tabs fallback (Flowbite sometimes needs explicit init in pure JS usage)
   function activateTab(targetId) {
     ['dict_tab', 'mask_tab'].forEach(id => {

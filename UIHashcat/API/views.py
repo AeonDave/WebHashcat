@@ -89,8 +89,6 @@ def _error_session_row(session, status="Node data unavailable", reason=""):
 
 
 def _hash_type_label(hash_type_id: int) -> str:
-    if hash_type_id == -1:
-        return "Plaintext"
     return Hashcat.get_hash_types().get(hash_type_id, {}).get("name", f"Unknown ({hash_type_id})")
 
 
