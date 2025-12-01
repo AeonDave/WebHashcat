@@ -402,6 +402,20 @@ def api_hashfile_sessions(request):
             offline = node_cached and node_cached.get("status") == "Error"
             reason = node_cached.get("error") if node_cached else ""
             status_label = _status_with_reason("Node not accessible" if offline else "Node data unavailable", reason)
+            if cluster_id and is_primary_cluster:
+                # Mostra solo Remove all per cluster orfani
+                buttons = (
+                    f'<button class="btn btn-danger" data-cluster="{cluster_id}" '
+                    f'onClick="cluster_action(\\\'{cluster_id}\\\', \\\'remove\\\')">Remove all</button>'
+                )
+            elif cluster_id and not is_primary_cluster:
+                buttons = ""
+            else:
+                # Solo Remove per sessioni orfane
+                buttons = (
+                    f'<button class="btn btn-danger" data-session="{session.name}" '
+                    f'onClick="session_action(\\\'{session.name}\\\', \\\'remove\\\')">Remove</button>'
+                )
             data.append({
                 "node": node_label,
                 "type": "",
@@ -411,7 +425,7 @@ def api_hashfile_sessions(request):
                 "remaining": "",
                 "progress": "",
                 "speed": "",
-                "buttons": "",
+                "buttons": buttons,
                 "cluster": cluster_id or "",
             })
             continue

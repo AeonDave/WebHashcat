@@ -206,8 +206,13 @@ class Server:
     @auth.login_required
     def _sessionInfo(self, session_name):
         try:
-
-            result = Hashcat.sessions[session_name].details()
+            session_obj = Hashcat.sessions.get(session_name)
+            if not session_obj:
+                return json.dumps({
+                    "response": "error",
+                    "message": f"Session {session_name} not found",
+                })
+            result = session_obj.details()
             result["response"] = "ok"
 
             return json.dumps(result)
@@ -227,8 +232,13 @@ class Server:
     def _hashcatOutput(self, session_name):
         try:
             result = {}
-
-            result["hashcat_output"] = Hashcat.sessions[session_name].hashcat_output()
+            session_obj = Hashcat.sessions.get(session_name)
+            if not session_obj:
+                return json.dumps({
+                    "response": "error",
+                    "message": f"Session {session_name} not found",
+                })
+            result["hashcat_output"] = session_obj.hashcat_output()
             result["response"] = "ok"
 
             return json.dumps(result)
@@ -248,8 +258,13 @@ class Server:
     def _hashes(self, session_name):
         try:
             result = {}
-
-            result["hashes"] = Hashcat.sessions[session_name].hashes()
+            session_obj = Hashcat.sessions.get(session_name)
+            if not session_obj:
+                return json.dumps({
+                    "response": "error",
+                    "message": f"Session {session_name} not found",
+                })
+            result["hashes"] = session_obj.hashes()
             result["response"] = "ok"
 
             return json.dumps(result)
@@ -269,7 +284,13 @@ class Server:
     def _get_potfile(self, session_name, from_line):
         from_line = int(from_line)
         try:
-            result = Hashcat.sessions[session_name].get_potfile(from_line)
+            session_obj = Hashcat.sessions.get(session_name)
+            if not session_obj:
+                return json.dumps({
+                    "response": "error",
+                    "message": f"Session {session_name} not found",
+                })
+            result = session_obj.get_potfile(from_line)
             result["response"] = "ok"
 
             return json.dumps(result)

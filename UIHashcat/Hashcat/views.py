@@ -345,14 +345,8 @@ def new_session(request):
 
         def _compute_keyspace_dictionary_meta(wl_name, rules_list, wl_meta, rule_meta):
             wl_count = _line_count(wl_meta, wl_name)
-            if wl_count is None:
-                wl_path = _resolve_asset_path(wl_meta, wl_name)
-                if wl_path and os.path.exists(wl_path):
-                    try:
-                        with open(wl_path, errors="backslashreplace") as fh:
-                            wl_count = sum(1 for _ in fh)
-                    except Exception:
-                        wl_count = None
+            # Non ricalcoliamo per evitare blocchi su dizionari grandi: se manca la metrica,
+            # meglio segnalare errore e chiedere di ri‑sincronizzare il file.
             if wl_count is None:
                 return None
             # Le rules non influiscono sullo split: vengono applicate dopo la distribuzione del dizionario.
@@ -367,37 +361,37 @@ def new_session(request):
             return 1  # CPU default
 
         def _compute_keyspace_mask(mask_name, mask_meta, hash_type_id):
-            # Per distribuzione semplice, dividiamo il file di mask per numero di righe (commenti esclusi).
             mask_path = _resolve_asset_path(mask_meta, mask_name)
             if not mask_path or not os.path.exists(mask_path):
                 return None
-            # Calcola il keyspace reale per ciascuna mask (base loop) usando hashcat --keyspace.
-            total = 0
-            bin_path = Hashcat.get_binary()
+            # Pre-carica le mask valide (senza commenti) per poter decidere rapidamente se usare hashcat --keyspace.
             try:
                 with open(mask_path, encoding="utf-8", errors="backslashreplace") as fh:
-                    for line in fh:
-                        mask_line = line.strip()
-                        if not mask_line or mask_line.startswith("#"):
-                            continue
-                        cmd = [bin_path, "--keyspace", "-a", "3"]
-                        if hash_type_id is not None and hash_type_id != -1:
-                            cmd += ["-m", str(hash_type_id)]
-                        cmd.append(mask_line)
-                        res = Hashcat.run_hashcat(cmd)
-                        if res.stdout:
-                            total += int(res.stdout.strip())
-            except HashcatExecutionError:
-                total = 0
+                    mask_lines = [line.strip() for line in fh if line.strip() and not line.lstrip().startswith("#")]
             except Exception:
-                total = 0
-            if total <= 0:
+                return None
+            if not mask_lines:
+                return None
+            # Evita di bloccare la UI: se il file contiene molte righe, usiamo il semplice conteggio delle mask.
+            # Per file piccoli manteniamo il calcolo accurato tramite hashcat --keyspace (per base loop).
+            if len(mask_lines) > 200:
+                return len(mask_lines)
+            total = 0
+            bin_path = Hashcat.get_binary()
+            for mask_line in mask_lines:
+                cmd = [bin_path, "--keyspace", "-a", "3"]
+                if hash_type_id is not None and hash_type_id != -1:
+                    cmd += ["-m", str(hash_type_id)]
+                cmd.append(mask_line)
                 try:
-                    with open(mask_path, encoding="utf-8", errors="backslashreplace") as fh:
-                        total = sum(1 for line in fh if line.strip() and not line.lstrip().startswith("#"))
+                    res = Hashcat.run_hashcat(cmd)
+                    if res.stdout:
+                        total += int(res.stdout.strip())
+                except HashcatExecutionError:
+                    return len(mask_lines)  # fallback: distribuisci per numero di righe
                 except Exception:
-                    return None
-            return total if total > 0 else None
+                    return len(mask_lines)
+            return total if total > 0 else len(mask_lines)
 
         # Modalità standard: un singolo nodo, nessun Brain esplicito dalla UI.
         if node_name not in ("__brain_cluster__", "__distributed_split__"):

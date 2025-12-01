@@ -241,8 +241,10 @@ class Hashcat(object):
 
                 if line_count is not None:
                     info["lines"] = humanize.intcomma(line_count)
+                    info["line_count"] = line_count  # valore grezzo per calcoli (es. split keyspace)
                 else:
                     info["lines"] = "unknown"
+                    info["line_count"] = None
 
                 if use_metadata and (cached_entry is None or cached_entry.get("md5") != info["md5"] or cached_lines != line_count):
                     meta_cache[info["name"]] = {"md5": info["md5"], "lines": line_count}
@@ -301,7 +303,7 @@ class Hashcat(object):
     def parse_help(self):
 
         help_section = None
-        help_section_regex = re.compile("^- \[ (?P<section_name>.*) \] -$")
+        help_section_regex = re.compile("^- \[ (?P<section_name>.*) ] -$")
         hash_mode_regex = re.compile("^\s*(?P<id>\d+)\s+\|\s+(?P<name>.+)\s+\|\s+(?P<description>.+)\s*$")
 
         hashcat_help = self.run_hashcat([self.get_binary(), '--help'])

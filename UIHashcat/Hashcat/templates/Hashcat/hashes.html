@@ -44,11 +44,15 @@
         <input type="hidden" name="action" value="add">
         <div>
           <label class="block text-sm mb-1" for="hash_type">Hash type</label>
-          <select class="w-full rounded border border-gray-700 bg-[#0b1220] p-2" id="hash_type" name="hash_type">
-            {% for hash_type in hash_type_list %}
-            <option value="{{ hash_type.id }}">{{ hash_type.name }}</option>
-            {% endfor %}
-          </select>
+          <div class="relative">
+            <input type="text" id="hash_type_filter" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 text-sm" placeholder="Search by name or ID...">
+            <div id="hash_type_dropdown" class="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded border border-gray-700 bg-[#0b1220] shadow-lg hidden"></div>
+            <select class="hidden" id="hash_type" name="hash_type">
+              {% for hash_type in hash_type_list %}
+              <option value="{{ hash_type.id }}">{{ hash_type.name }} ({{ hash_type.id }})</option>
+                {% endfor %}
+              </select>
+          </div>
         </div>
         <div>
           <label class="block text-sm mb-1" for="name">Name</label>
@@ -115,7 +119,7 @@
             <label class="block text-sm">Hash type
               <select id="hash_type_dict" name="hash_type" class="w-full rounded border border-gray-700 bg-[#0b1220] p-2 mt-1">
                 {% for hash_type in hash_type_list %}
-                <option value="{{ hash_type.id }}">{{ hash_type.name }}</option>
+                <option value="{{ hash_type.id }}">{{ hash_type.name }} ({{ hash_type.id }})</option>
                 {% endfor %}
               </select>
             </label>

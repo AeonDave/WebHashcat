@@ -220,6 +220,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#update_hashfiles').on('click', function () {
     reload_hashfile_table();
   });
+  // Auto-refresh hashfiles and subtables to keep status current
+  setInterval(reload_hashfile_table, 5000);
 
   function session_action(session_name, action) {
     if (actionInFlight) return;
@@ -313,10 +315,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const button = event.relatedTarget;
     const hashfile_name = button?.getAttribute('data-hashfile') || '';
     const hashfile_id = button?.getAttribute('data-hashfile_id') || '';
-      $('#session_modal_title').text(`${hashfile_name}: New session`);
-      $('#hashfile_id_dict').val(hashfile_id);
-      $('#hashfile_id_mask').val(hashfile_id);
-    });
+    $('#session_modal_title').text(`${hashfile_name}: New session`);
+    $('#hashfile_id_dict').val(hashfile_id);
+    $('#hashfile_id_mask').val(hashfile_id);
+  });
   function openSessionModal(btn) {
     const hashfile_name = $(btn).data('hashfile') || '';
     const hashfile_id = $(btn).data('hashfile_id') || '';
@@ -339,6 +341,60 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('button[data-modal-target="action_add"]').forEach(btn => {
     btn.addEventListener('click', () => showModal('action_add'));
   });
+  // Filtered dropdown for "New hashfile" hash type selection (single combined control)
+  function initFilterDropdown(selectId, inputId, listId) {
+    const selectEl = document.getElementById(selectId);
+    const inputEl = document.getElementById(inputId);
+    const listEl = document.getElementById(listId);
+    if (!selectEl || !inputEl || !listEl) return;
+
+    const options = Array.from(selectEl.options);
+    selectEl.classList.add('hidden'); // keep for form submission
+
+    const render = (query = '') => {
+      const q = query.toLowerCase();
+      listEl.innerHTML = '';
+      options.forEach(opt => {
+        const text = opt.text.toLowerCase();
+        const val = String(opt.value || '').toLowerCase();
+        if (q && !(text.includes(q) || val.includes(q))) return;
+        const item = document.createElement('div');
+        item.className = 'px-3 py-2 hover:bg-primary/20 cursor-pointer text-sm';
+        item.dataset.value = opt.value;
+        item.textContent = opt.text;
+        item.addEventListener('click', () => {
+          selectEl.value = opt.value;
+          inputEl.value = opt.text;
+          listEl.classList.add('hidden');
+        });
+        listEl.appendChild(item);
+      });
+      if (!listEl.childElementCount) {
+        const empty = document.createElement('div');
+        empty.className = 'px-3 py-2 text-xs text-gray-400';
+        empty.textContent = 'No matches';
+        listEl.appendChild(empty);
+      }
+    };
+
+    inputEl.addEventListener('focus', () => {
+      render(inputEl.value);
+      listEl.classList.remove('hidden');
+    });
+    inputEl.addEventListener('input', () => {
+      render(inputEl.value);
+      listEl.classList.remove('hidden');
+    });
+    document.addEventListener('click', (evt) => {
+      const container = inputEl.parentElement;
+      if (!container.contains(evt.target)) {
+        listEl.classList.add('hidden');
+      }
+    });
+
+    // Start with empty search field; selection remains whatever default was set in markup.
+  }
+  initFilterDropdown('hash_type', 'hash_type_filter', 'hash_type_dropdown');
   // Tabs fallback (Flowbite sometimes needs explicit init in pure JS usage)
   function activateTab(targetId) {
     ['dict_tab', 'mask_tab'].forEach(id => {
