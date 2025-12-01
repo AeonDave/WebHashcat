@@ -184,6 +184,7 @@ def hashfiles(request):
                 messages.success(request, "Plaintext file successfully added")
 
     context["node_list"] = Node.objects.all()
+    context["multi_node"] = context["node_list"].count() > 1
     hash_types = _available_hash_types()
     # Autodetect in hashcat still requires choosing among suggested modes; we require explicit selection to avoid ambiguity.
     context["hash_type_list"] = [{'id': -1, 'name': 'Plaintext'}] + hash_types

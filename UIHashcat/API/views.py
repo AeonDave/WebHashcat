@@ -459,10 +459,31 @@ def api_hashfile_sessions(request):
                 wordlist = cached.get("wordlist")
             elif crack_type == "mask":
                 rule_mask = cached.get("mask")
-                wordlist = ""
+                wordlist = "—"
             else:
                 rule_mask = ""
                 wordlist = ""
+
+            # Normalizza rule/mask: se arriva come lista, uniscila in stringa
+            if isinstance(rule_mask, list):
+                rule_mask = ", ".join(str(x) for x in rule_mask if x is not None)
+
+            # Trim rule/mask for display; show full list in tooltip (one per line)
+            tooltip_rule_mask = ""
+            display_rule_mask = rule_mask
+            if rule_mask and len(rule_mask) > 60:
+                parts = [p.strip() for p in rule_mask.split(",") if p.strip()]
+                count = len(parts)
+                if parts:
+                    display_rule_mask = parts[0]
+                    if count > 1:
+                        display_rule_mask = f"{display_rule_mask},...({count})"
+                    tooltip_rule_mask = "\n".join(parts)
+            elif rule_mask:
+                # Tooltip anche quando corto: mostra elementi su righe separate se multipli
+                parts = [p.strip() for p in rule_mask.split(",") if p.strip()]
+                if len(parts) > 1:
+                    tooltip_rule_mask = "\n".join(parts)
 
             status_label = status_value
             reason = cached.get("reason") or cached.get("error")
@@ -477,7 +498,7 @@ def api_hashfile_sessions(request):
         data.append({
             "node": node_label,
             "type": crack_type,
-            "rule_mask": rule_mask,
+            "rule_mask": f'<span title="{tooltip_rule_mask or rule_mask}">{display_rule_mask}</span>' if rule_mask else "",
             "wordlist": wordlist,
             "status": status_label,
             "remaining": remaining,
