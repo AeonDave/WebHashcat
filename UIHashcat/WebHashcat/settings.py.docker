@@ -82,24 +82,27 @@ WSGI_APPLICATION = 'WebHashcat.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/2.0/ref/settings/#databases
 
-if os.environ.get("WEBHASHCAT_USE_SQLITE", "0") == "1":
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': os.path.join(BASE_DIR, 'webhashcat-test.sqlite3'),
-        }
+# MySQL only. Read configuration from environment, with docker-compose defaults.
+DB_HOST = os.environ.get("MYSQL_HOST", "db")
+DB_PORT = int(os.environ.get("MYSQL_PORT", "3306"))
+DB_NAME = os.environ.get("MYSQL_DATABASE", "webhashcat")
+DB_USER = os.environ.get("MYSQL_USER", "webhashcat")
+DB_PASSWORD = os.environ.get("MYSQL_PASSWORD", "webhashcat_password")
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'HOST': DB_HOST,
+        'PORT': DB_PORT,
+        'NAME': DB_NAME,
+        'USER': DB_USER,
+        'PASSWORD': DB_PASSWORD,
+        # Optional: increase connection timeout a bit for container cold starts
+        'OPTIONS': {
+            'connect_timeout': int(os.environ.get('MYSQL_CONNECT_TIMEOUT', '10')),
+        },
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.mysql',
-	    'HOST': 'db',
-            'PORT': 3306,
-            'NAME': 'webhashcat',
-            'USER': 'webhashcat',
-            'PASSWORD': 'webhashcat_password',
-        }
-    }
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/2.0/ref/settings/#auth-password-validators
@@ -145,10 +148,11 @@ STATICFILES_DIRS = [
 
 LOGIN_URL = '/Auth/'
 
-# Celery
-BROKER_URL = 'redis://redis:6379'
-CELERY_BROKER_URL = 'redis://redis:6379'
-CELERY_RESULT_BACKEND = 'redis://redis:6379'
+# Celery (parametrized via env, with sane defaults for docker-compose)
+# Prefer CELERY_BROKER_URL/CELERY_RESULT_BACKEND from environment; fall back to local redis service
+BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379')
+CELERY_BROKER_URL = BROKER_URL
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'

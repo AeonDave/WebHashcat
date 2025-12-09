@@ -197,10 +197,11 @@ class HashcatSnapshotCacheTests(SimpleTestCase):
 
 
 class SettingsSampleCompileTests(SimpleTestCase):
-    def test_settings_sample_compiles(self):
+    def test_settings_docker_compiles(self):
+        """Ensure our real settings template compiles (syntax only)."""
         root = Path(__file__).resolve().parents[2]
-        sample_path = root / "WebHashcat" / "WebHashcat" / "settings.py.sample"
-        py_compile.compile(str(sample_path), doraise=True)
+        docker_settings = root / "UIHashcat" / "WebHashcat" / "settings.py.docker"
+        py_compile.compile(str(docker_settings), doraise=True)
 
 
 class OptimizePotfileTests(TestCase):

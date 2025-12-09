@@ -55,7 +55,7 @@ cp .env.example .env
 A single `.env` file powers both WebHashcat and HashcatNode: credentials, Brain, hashcat paths, and database settings. The old `settings.ini` and `variables.env` files are no longer used.
 
 Key variables in `.env`:
-- WebHashcat: `SECRET_KEY`, `DEBUG`, `DJANGO_SUPERUSER_*`, `MYSQL_*`, `HASHCAT_CACHE_*`, `HASHCAT_BRAIN_HOST`.
+- WebHashcat: `SECRET_KEY`, `DEBUG`, `DJANGO_SUPERUSER_*`, `MYSQL_*`, `HASHCAT_CACHE_*`, `HASHCAT_BRAIN_HOST`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`.
   - If `SECRET_KEY` is unset or set to `[generate]`, a random value is generated at container start.
 - HashcatNode: `HASHCATNODE_USERNAME` / `HASHCATNODE_PASSWORD`, `HASHCATNODE_BIND` / `HASHCATNODE_PORT`, `HASHCATNODE_BINARY`, `HASHCATNODE_HASHES_DIR` / `RULES_DIR` / `WORDLISTS_DIR` / `MASKS_DIR`, `HASHCATNODE_WORKLOAD_PROFILE`, `HASHCATNODE_BRAIN_*` (by default the password falls back to `HASHCAT_BRAIN_PASSWORD`; set `HASHCATNODE_BRAIN_PASSWORD` only if you need a different one).
 
